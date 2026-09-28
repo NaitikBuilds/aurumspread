@@ -14,7 +14,9 @@ from aurumspread.config import (
     DEFAULT_CONFIG_DIR,
     ConfigError,
     ContractsConfig,
+    CostsConfig,
     load_contracts,
+    load_costs,
 )
 
 # A minimal valid contracts.yaml payload. Values mirror the PS-03 table for two families.
@@ -193,3 +195,109 @@ def test_bad_basis_purity_rejected(tmp_path: Path) -> None:
     payload["basis_purity"] = 0
     with pytest.raises(ConfigError, match="basis_purity"):
         load_contracts(_write(tmp_path, payload))
+
+
+# ================================================================== costs.yaml
+
+VALID_COSTS: dict[str, Any] = {
+    "brokerage_inr_per_order": None,
+    "exchange_txn_charge_pct": None,
+    "ctt_pct_on_sell": None,
+    "sebi_fee_pct": None,
+    "stamp_duty_pct": None,
+    "gst_pct_on_fees": None,
+    "slippage": {
+        "model": "half_spread_ticks",
+        "ticks_per_side": {"GOLDM": 1, "GOLDTEN": 2},
+        "thin_day_multiplier": 2.0,
+    },
+    "stress_multipliers": [0.5, 1.0, 2.0],
+}
+
+
+def _costs(**changes: Any) -> dict[str, Any]:
+    payload = copy.deepcopy(VALID_COSTS)
+    payload.update(changes)
+    return payload
+
+
+def test_repo_costs_yaml_loads() -> None:
+    cfg = load_costs()
+    assert isinstance(cfg, CostsConfig)
+    assert cfg.slippage.model == "half_spread_ticks"
+    assert cfg.ticks_for("GOLDPETAL") == 3
+    assert cfg.slippage.thin_day_multiplier == 2.0
+    assert 1.0 in cfg.stress_multipliers
+    # All fee fields are placeholders until verified (costs.yaml header).
+    assert cfg.unverified_fields() == CostsConfig.VERIFY_FIELDS
+
+
+def test_costs_verified_fields_clear_flag(tmp_path: Path) -> None:
+    filled = _costs(
+        brokerage_inr_per_order=20.0,
+        exchange_txn_charge_pct=0.0026,
+        ctt_pct_on_sell=0.01,
+        sebi_fee_pct=0.0001,
+        stamp_duty_pct=0.002,
+        gst_pct_on_fees=18.0,
+    )
+    cfg = load_costs(_write(tmp_path, filled, "costs.yaml"))
+    assert cfg.unverified_fields() == ()
+    assert cfg.brokerage_inr_per_order == 20.0
+
+
+def test_costs_missing_fee_key_rejected(tmp_path: Path) -> None:
+    payload = copy.deepcopy(VALID_COSTS)
+    del payload["ctt_pct_on_sell"]
+    with pytest.raises(ConfigError, match="ctt_pct_on_sell"):
+        load_costs(_write(tmp_path, payload, "costs.yaml"))
+
+
+def test_costs_negative_fee_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="sebi_fee_pct"):
+        load_costs(_write(tmp_path, _costs(sebi_fee_pct=-0.1), "costs.yaml"))
+
+
+def test_costs_unknown_key_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="brokerage_pct"):
+        load_costs(_write(tmp_path, _costs(brokerage_pct=0.01), "costs.yaml"))
+
+
+def test_costs_unknown_slippage_model_rejected(tmp_path: Path) -> None:
+    payload = copy.deepcopy(VALID_COSTS)
+    payload["slippage"]["model"] = "magic"
+    with pytest.raises(ConfigError, match=r"slippage\.model"):
+        load_costs(_write(tmp_path, payload, "costs.yaml"))
+
+
+def test_costs_negative_ticks_rejected(tmp_path: Path) -> None:
+    payload = copy.deepcopy(VALID_COSTS)
+    payload["slippage"]["ticks_per_side"]["GOLDM"] = -1
+    with pytest.raises(ConfigError, match="ticks_per_side"):
+        load_costs(_write(tmp_path, payload, "costs.yaml"))
+
+
+def test_costs_lowercase_tick_symbol_rejected(tmp_path: Path) -> None:
+    payload = copy.deepcopy(VALID_COSTS)
+    payload["slippage"]["ticks_per_side"]["goldm"] = 1
+    with pytest.raises(ConfigError, match="upper-case"):
+        load_costs(_write(tmp_path, payload, "costs.yaml"))
+
+
+def test_costs_thin_multiplier_below_one_rejected(tmp_path: Path) -> None:
+    payload = copy.deepcopy(VALID_COSTS)
+    payload["slippage"]["thin_day_multiplier"] = 0.5
+    with pytest.raises(ConfigError, match="thin_day_multiplier"):
+        load_costs(_write(tmp_path, payload, "costs.yaml"))
+
+
+@pytest.mark.parametrize("multipliers", [[], [0.5, 2.0], [0.0, 1.0], [-1.0, 1.0]])
+def test_costs_bad_stress_multipliers_rejected(tmp_path: Path, multipliers: list[float]) -> None:
+    with pytest.raises(ConfigError, match="stress_multipliers"):
+        load_costs(_write(tmp_path, _costs(stress_multipliers=multipliers), "costs.yaml"))
+
+
+def test_costs_ticks_for_unknown_symbol_raises(tmp_path: Path) -> None:
+    cfg = load_costs(_write(tmp_path, VALID_COSTS, "costs.yaml"))
+    with pytest.raises(ConfigError, match="GOLDGUINEA"):
+        cfg.ticks_for("GOLDGUINEA")

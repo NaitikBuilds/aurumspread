@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, Literal, TypeVar
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -54,6 +54,13 @@ def _validate(model: type[_ModelT], raw: dict[str, Any], path: Path) -> _ModelT:
 
 class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+def _check_symbol_keys(v: dict[str, Any]) -> dict[str, Any]:
+    bad = [s for s in v if not s or s != s.strip().upper()]
+    if bad:
+        raise ValueError(f"contract symbols must be stripped upper-case, got {bad}")
+    return v
 
 
 # --------------------------------------------------------------------------- contracts.yaml
@@ -106,10 +113,7 @@ class ContractsConfig(_FrozenModel):
     @field_validator("contracts")
     @classmethod
     def _check_symbols(cls, v: dict[str, ContractSpec]) -> dict[str, ContractSpec]:
-        bad = [s for s in v if not s or s != s.strip().upper()]
-        if bad:
-            raise ValueError(f"contract symbols must be stripped upper-case, got {bad}")
-        return v
+        return _check_symbol_keys(v)
 
     @property
     def symbols(self) -> tuple[str, ...]:
@@ -128,3 +132,80 @@ def load_contracts(path: Path | str | None = None) -> ContractsConfig:
     """Load and validate ``contracts.yaml`` (default: ``config/contracts.yaml`` in the repo)."""
     resolved = Path(path) if path is not None else DEFAULT_CONFIG_DIR / "contracts.yaml"
     return _validate(ContractsConfig, _read_yaml_mapping(resolved), resolved)
+
+
+# --------------------------------------------------------------------------- costs.yaml
+
+
+class SlippageConfig(_FrozenModel):
+    """Slippage assumptions (docs/COST_MODEL.md item 1)."""
+
+    model: Literal["half_spread_ticks", "pct_of_price", "volume_scaled"]
+    ticks_per_side: dict[str, float] = Field(
+        min_length=1, description="Ticks paid per side per symbol; assumption, stress-tested."
+    )
+    thin_day_multiplier: float = Field(ge=1, description="Slippage multiplier on thin days.")
+
+    @field_validator("ticks_per_side")
+    @classmethod
+    def _check_ticks(cls, v: dict[str, float]) -> dict[str, float]:
+        _check_symbol_keys(v)
+        negative = {s: t for s, t in v.items() if t < 0}
+        if negative:
+            raise ValueError(f"ticks_per_side must be >= 0, got {negative}")
+        return v
+
+
+class CostsConfig(_FrozenModel):
+    """Whole ``config/costs.yaml``. Fee fields are null until verified against a contract note.
+
+    Percentages are expressed as in the YAML (``pct`` = per 100 of notional).
+    """
+
+    VERIFY_FIELDS: ClassVar[tuple[str, ...]] = (
+        "brokerage_inr_per_order",
+        "exchange_txn_charge_pct",
+        "ctt_pct_on_sell",
+        "sebi_fee_pct",
+        "stamp_duty_pct",
+        "gst_pct_on_fees",
+    )
+
+    brokerage_inr_per_order: float | None = Field(ge=0, description="verify - flat INR per order.")
+    exchange_txn_charge_pct: float | None = Field(ge=0, description="verify - MCX schedule.")
+    ctt_pct_on_sell: float | None = Field(ge=0, description="verify - CTT, sell side only.")
+    sebi_fee_pct: float | None = Field(ge=0, description="verify - SEBI turnover fee.")
+    stamp_duty_pct: float | None = Field(ge=0, description="verify - stamp duty (buy side).")
+    gst_pct_on_fees: float | None = Field(ge=0, description="verify - GST applied on fees.")
+    slippage: SlippageConfig
+    stress_multipliers: tuple[float, ...] = Field(
+        min_length=1, description="Cost multiples to report; must include 1.0 (base case)."
+    )
+
+    @field_validator("stress_multipliers")
+    @classmethod
+    def _check_multipliers(cls, v: tuple[float, ...]) -> tuple[float, ...]:
+        if any(m <= 0 for m in v):
+            raise ValueError(f"all multipliers must be > 0, got {list(v)}")
+        if 1.0 not in v:
+            raise ValueError(f"must include the base case 1.0, got {list(v)}")
+        return v
+
+    def unverified_fields(self) -> tuple[str, ...]:
+        """Names of fee fields that are still null (results must be flagged until empty)."""
+        return tuple(name for name in self.VERIFY_FIELDS if getattr(self, name) is None)
+
+    def ticks_for(self, symbol: str) -> float:
+        try:
+            return self.slippage.ticks_per_side[symbol]
+        except KeyError:
+            raise ConfigError(
+                f"no slippage ticks configured for {symbol!r}; "
+                f"configured: {list(self.slippage.ticks_per_side)}"
+            ) from None
+
+
+def load_costs(path: Path | str | None = None) -> CostsConfig:
+    """Load and validate ``costs.yaml`` (default: ``config/costs.yaml`` in the repo)."""
+    resolved = Path(path) if path is not None else DEFAULT_CONFIG_DIR / "costs.yaml"
+    return _validate(CostsConfig, _read_yaml_mapping(resolved), resolved)
