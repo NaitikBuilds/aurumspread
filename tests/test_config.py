@@ -12,9 +12,13 @@ import yaml
 
 from aurumspread.config import (
     DEFAULT_CONFIG_DIR,
+    AppConfig,
+    BacktestConfig,
     ConfigError,
     ContractsConfig,
     CostsConfig,
+    load_all,
+    load_backtest,
     load_contracts,
     load_costs,
 )
@@ -301,3 +305,138 @@ def test_costs_ticks_for_unknown_symbol_raises(tmp_path: Path) -> None:
     cfg = load_costs(_write(tmp_path, VALID_COSTS, "costs.yaml"))
     with pytest.raises(ConfigError, match="GOLDGUINEA"):
         cfg.ticks_for("GOLDGUINEA")
+
+
+# ================================================================== backtest.yaml
+
+VALID_BACKTEST: dict[str, Any] = {
+    "seed": 42,
+    "split": {"warmup_days": 60, "train_end": None, "embargo_days": 10, "test_start": None},
+    "zscore_window_days": 60,
+    "entry_z": 2.0,
+    "exit_z": 0.5,
+    "stop_z": 4.0,
+    "max_hold_days": 15,
+    "exit_buffer_days_before_expiry": 5,
+    "liquidity": {
+        "min_volume_lots": None,
+        "min_open_interest_lots": None,
+        "max_participation_pct_of_volume": 5,
+    },
+    "capital_inr": 1_000_000,
+    "fill_rule": "next_day_settlement",
+}
+
+
+def _bt(**changes: Any) -> dict[str, Any]:
+    payload = copy.deepcopy(VALID_BACKTEST)
+    payload.update(changes)
+    return payload
+
+
+def _bt_split(**changes: Any) -> dict[str, Any]:
+    payload = copy.deepcopy(VALID_BACKTEST)
+    payload["split"].update(changes)
+    return payload
+
+
+def test_repo_backtest_yaml_loads() -> None:
+    cfg = load_backtest()
+    assert isinstance(cfg, BacktestConfig)
+    assert cfg.seed == 42
+    assert cfg.zscore_window_days == 60
+    assert cfg.exit_z < cfg.entry_z < cfg.stop_z
+    assert cfg.fill_rule == "next_day_settlement"
+    assert cfg.liquidity.max_participation_pct_of_volume == 5
+    # Dates are not frozen until the data audit (backtest.yaml comment, DECISIONS.md).
+    assert cfg.split.is_frozen is False
+
+
+def test_backtest_split_frozen_when_dates_set(tmp_path: Path) -> None:
+    payload = _bt_split(train_end="2026-03-31", test_start="2026-04-15")
+    cfg = load_backtest(_write(tmp_path, payload, "backtest.yaml"))
+    assert cfg.split.is_frozen is True
+    assert cfg.split.train_end == date(2026, 3, 31)
+    assert cfg.split.test_start == date(2026, 4, 15)
+
+
+def test_backtest_test_start_before_train_end_rejected(tmp_path: Path) -> None:
+    payload = _bt_split(train_end="2026-04-15", test_start="2026-03-31")
+    with pytest.raises(ConfigError, match="after train_end"):
+        load_backtest(_write(tmp_path, payload, "backtest.yaml"))
+
+
+def test_backtest_embargo_shorter_than_configured_rejected(tmp_path: Path) -> None:
+    # 2026-03-31 -> 2026-04-05 is 5 calendar days, embargo requires >= 10.
+    payload = _bt_split(train_end="2026-03-31", test_start="2026-04-05")
+    with pytest.raises(ConfigError, match="embargo_days"):
+        load_backtest(_write(tmp_path, payload, "backtest.yaml"))
+
+
+@pytest.mark.parametrize(
+    "thresholds",
+    [
+        {"entry_z": 0.5, "exit_z": 0.5},  # entry must exceed exit
+        {"entry_z": 2.0, "exit_z": 3.0},
+        {"entry_z": 4.0, "stop_z": 4.0},  # stop must exceed entry
+        {"entry_z": 5.0, "stop_z": 4.0},
+    ],
+)
+def test_backtest_threshold_order_enforced(tmp_path: Path, thresholds: dict[str, float]) -> None:
+    with pytest.raises(ConfigError, match="exit_z < entry_z < stop_z"):
+        load_backtest(_write(tmp_path, _bt(**thresholds), "backtest.yaml"))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("seed", -1),
+        ("zscore_window_days", 1),
+        ("max_hold_days", 0),
+        ("exit_buffer_days_before_expiry", -1),
+        ("capital_inr", 0),
+        ("fill_rule", "same_day_close"),
+    ],
+)
+def test_backtest_out_of_range_rejected(tmp_path: Path, field: str, value: Any) -> None:
+    with pytest.raises(ConfigError, match=field):
+        load_backtest(_write(tmp_path, _bt(**{field: value}), "backtest.yaml"))
+
+
+def test_backtest_participation_over_100_rejected(tmp_path: Path) -> None:
+    payload = copy.deepcopy(VALID_BACKTEST)
+    payload["liquidity"]["max_participation_pct_of_volume"] = 150
+    with pytest.raises(ConfigError, match="max_participation_pct_of_volume"):
+        load_backtest(_write(tmp_path, payload, "backtest.yaml"))
+
+
+def test_backtest_unknown_key_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="entry_zscore"):
+        load_backtest(_write(tmp_path, _bt(entry_zscore=2.0), "backtest.yaml"))
+
+
+# ================================================================== load_all
+
+
+def test_load_all_from_repo_config_dir() -> None:
+    cfg = load_all()
+    assert isinstance(cfg, AppConfig)
+    assert cfg.contracts.symbols == ("GOLDM", "GOLDTEN", "GOLDGUINEA", "GOLDPETAL")
+    for symbol in cfg.contracts.symbols:
+        assert cfg.costs.ticks_for(symbol) >= 0
+
+
+def test_load_all_requires_ticks_for_every_contract(tmp_path: Path) -> None:
+    _write(tmp_path, VALID_CONTRACTS, "contracts.yaml")  # GOLDM + GOLDTEN
+    costs = copy.deepcopy(VALID_COSTS)
+    del costs["slippage"]["ticks_per_side"]["GOLDTEN"]
+    _write(tmp_path, costs, "costs.yaml")
+    _write(tmp_path, VALID_BACKTEST, "backtest.yaml")
+    with pytest.raises(ConfigError, match="GOLDTEN"):
+        load_all(tmp_path)
+
+
+def test_load_all_reports_missing_file(tmp_path: Path) -> None:
+    _write(tmp_path, VALID_CONTRACTS, "contracts.yaml")
+    with pytest.raises(ConfigError, match="costs.yaml"):
+        load_all(tmp_path)

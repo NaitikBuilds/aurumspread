@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any, ClassVar, Literal, TypeVar
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONFIG_DIR = REPO_ROOT / "config"
@@ -209,3 +216,109 @@ def load_costs(path: Path | str | None = None) -> CostsConfig:
     """Load and validate ``costs.yaml`` (default: ``config/costs.yaml`` in the repo)."""
     resolved = Path(path) if path is not None else DEFAULT_CONFIG_DIR / "costs.yaml"
     return _validate(CostsConfig, _read_yaml_mapping(resolved), resolved)
+
+
+# --------------------------------------------------------------------------- backtest.yaml
+
+
+class SplitConfig(_FrozenModel):
+    """``warmup | TRAIN | embargo | TEST`` timeline (docs/BACKTEST_PROTOCOL.md).
+
+    ``train_end`` / ``test_start`` stay null until the data audit freezes them in
+    DECISIONS.md; :attr:`is_frozen` tells callers whether a TEST run is allowed.
+    """
+
+    warmup_days: int = Field(ge=0)
+    train_end: date | None
+    embargo_days: int = Field(ge=0)
+    test_start: date | None
+
+    @model_validator(mode="after")
+    def _check_order(self) -> SplitConfig:
+        if self.train_end is not None and self.test_start is not None:
+            gap_days = (self.test_start - self.train_end).days
+            if gap_days <= 0:
+                raise ValueError(
+                    f"test_start ({self.test_start}) must be after train_end ({self.train_end})"
+                )
+            # Calendar-day gap is a lower bound on the embargo whichever day-count is used.
+            if gap_days < self.embargo_days:
+                raise ValueError(
+                    f"test_start - train_end is {gap_days} days, "
+                    f"shorter than embargo_days={self.embargo_days}"
+                )
+        return self
+
+    @property
+    def is_frozen(self) -> bool:
+        return self.train_end is not None and self.test_start is not None
+
+
+class LiquidityConfig(_FrozenModel):
+    """Liquidity filters; minimums are null until calibrated on TRAIN."""
+
+    min_volume_lots: int | None = Field(ge=0)
+    min_open_interest_lots: int | None = Field(ge=0)
+    max_participation_pct_of_volume: float = Field(gt=0, le=100)
+
+
+class BacktestConfig(_FrozenModel):
+    """Whole ``config/backtest.yaml``."""
+
+    seed: int = Field(ge=0)
+    split: SplitConfig
+    zscore_window_days: int = Field(ge=2)
+    entry_z: float = Field(gt=0)
+    exit_z: float = Field(ge=0)
+    stop_z: float = Field(gt=0)
+    max_hold_days: int = Field(ge=1)
+    exit_buffer_days_before_expiry: int = Field(ge=0)
+    liquidity: LiquidityConfig
+    capital_inr: float = Field(gt=0)
+    fill_rule: Literal["next_day_settlement"]
+
+    @model_validator(mode="after")
+    def _check_thresholds(self) -> BacktestConfig:
+        if not self.exit_z < self.entry_z < self.stop_z:
+            raise ValueError(
+                f"need exit_z < entry_z < stop_z, got "
+                f"exit_z={self.exit_z}, entry_z={self.entry_z}, stop_z={self.stop_z}"
+            )
+        return self
+
+
+def load_backtest(path: Path | str | None = None) -> BacktestConfig:
+    """Load and validate ``backtest.yaml`` (default: ``config/backtest.yaml`` in the repo)."""
+    resolved = Path(path) if path is not None else DEFAULT_CONFIG_DIR / "backtest.yaml"
+    return _validate(BacktestConfig, _read_yaml_mapping(resolved), resolved)
+
+
+# --------------------------------------------------------------------------- everything
+
+
+class AppConfig(_FrozenModel):
+    """All three configs, cross-checked for consistency."""
+
+    contracts: ContractsConfig
+    costs: CostsConfig
+    backtest: BacktestConfig
+
+    @model_validator(mode="after")
+    def _cross_check(self) -> AppConfig:
+        missing = [s for s in self.contracts.symbols if s not in self.costs.slippage.ticks_per_side]
+        if missing:
+            raise ValueError(f"costs.slippage.ticks_per_side lacks contract symbols {missing}")
+        return self
+
+
+def load_all(config_dir: Path | str | None = None) -> AppConfig:
+    """Load ``contracts.yaml``, ``costs.yaml`` and ``backtest.yaml`` from one directory."""
+    base = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
+    try:
+        return AppConfig(
+            contracts=load_contracts(base / "contracts.yaml"),
+            costs=load_costs(base / "costs.yaml"),
+            backtest=load_backtest(base / "backtest.yaml"),
+        )
+    except ValidationError as exc:
+        raise ConfigError(f"{base}: {_format_errors(exc)}") from exc
