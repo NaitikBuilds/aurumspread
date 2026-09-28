@@ -13,6 +13,7 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 RESPONSE_DATE_FORMAT = "%m/%d/%Y"  # Date column in the response, e.g. 09/04/2026
@@ -158,4 +159,5 @@ def parse_bhavcopy_csv(source: bytes | str | Path, *, source_name: str = "") -> 
     for raw_col in ("Volume", "OpenInterest"):
         out[RAW_TO_PARSED[raw_col]] = _parse_number(raw[raw_col], raw_col, allow_blank=True)
     out["source"] = source_name or (str(source) if isinstance(source, Path) else "<bytes>")
+    out["source_row"] = np.arange(len(raw), dtype="int64") + 2  # 1-based line number, header=1
     return out.reset_index(drop=True)

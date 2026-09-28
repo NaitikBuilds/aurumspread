@@ -116,7 +116,8 @@ def test_parse_csv_types_and_columns() -> None:
         ),
         source_name="unit-test",
     )
-    assert list(frame.columns) == [*PARSED_COLUMNS, "source"]
+    assert list(frame.columns) == [*PARSED_COLUMNS, "source", "source_row"]
+    assert frame["source_row"].tolist() == [2, 3]  # line numbers in the raw file
     assert frame["symbol"].tolist() == ["GOLDM", "GOLDPETAL"]
     assert frame["trade_date"].tolist() == [date(2026, 9, 4), date(2026, 9, 4)]
     assert frame["expiry_date"].tolist() == [date(2026, 10, 5), date(2026, 9, 30)]
@@ -142,7 +143,7 @@ def test_parse_csv_from_path_with_bom_and_crlf(tmp_path: Path) -> None:
 def test_parse_csv_header_only_gives_empty_typed_frame() -> None:
     frame = parse_bhavcopy_csv(_csv())
     assert len(frame) == 0
-    assert list(frame.columns) == [*PARSED_COLUMNS, "source"]
+    assert list(frame.columns) == [*PARSED_COLUMNS, "source", "source_row"]
 
 
 def test_parse_csv_tolerates_padded_header_names() -> None:
