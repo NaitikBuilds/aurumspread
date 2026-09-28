@@ -1,0 +1,10 @@
+---
+description: Git identity and commit conventions
+alwaysApply: true
+---
+- Repo: github.com/NaitikBuilds/aurumspread. Identity is fixed: name `NaitikBuilds`, email `naitikchandel07@gmail.com` (set in LOCAL repo config by `scripts/setup_git.sh`).
+- NEVER run `git config --global`, `git commit --author`, or set GIT_AUTHOR_*/GIT_COMMITTER_* to another identity. Before the first commit of a session run `git config user.email` and confirm it matches.
+- Do not add `Co-authored-by`, "Generated with", or tool-attribution trailers to commit messages.
+- Conventional Commits: `type(scope): imperative summary` (feat, fix, docs, test, refactor, chore, perf, ci). Summary <= 72 chars; body explains why.
+- One logical change per commit; run `make check` first. Never commit `data/raw`, `.env`, secrets, or large outputs.
+- Never force-push, rewrite published history, or push to any remote other than `origin`. Work on branches `feat/<topic>`; merge to `main` only when the user says so.

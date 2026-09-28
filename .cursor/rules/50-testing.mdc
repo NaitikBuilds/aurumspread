@@ -1,0 +1,9 @@
+---
+description: Testing standards
+globs: ["tests/**/*.py", "src/**/*.py"]
+alwaysApply: false
+---
+- pytest; tests deterministic, no network. Use small fixture CSVs in `tests/fixtures/` (real rows copied from Bhavcopy, not invented).
+- Each module gets tests for: happy path, holiday/mismatched date, missing/zero volume, expiry rollover, GOLDTEN pre-listing absence.
+- Normalization tests use hand-computed values with the arithmetic shown in a comment.
+- Run `make check` (ruff + pytest) before proposing a commit.

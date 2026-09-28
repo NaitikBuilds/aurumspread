@@ -1,0 +1,10 @@
+---
+description: Dashboard rules
+globs: ["src/aurumspread/app/**"]
+alwaysApply: false
+---
+- Streamlit + Plotly. The UI only reads precomputed artifacts or calls pure functions; no business logic in UI files.
+- Every displayed metric has a tooltip/expander showing its formula and source rows.
+- Net-of-cost numbers are the default; gross is shown only alongside net.
+- Alert view defaults to quiet: show "No actionable signal" when none pass LAMS. Never pad with fake alerts.
+- Cache with `st.cache_data`; app must run fully offline from `data/processed`.

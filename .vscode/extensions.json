@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "charliermarsh.ruff",
+    "ms-toolsai.jupyter",
+    "ms-toolsai.datawrangler",
+    "eamodio.gitlens",
+    "redhat.vscode-yaml",
+    "tamasfe.even-better-toml",
+    "yzhang.markdown-all-in-one"
+  ]
+}

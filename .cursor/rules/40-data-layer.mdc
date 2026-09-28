@@ -1,0 +1,11 @@
+---
+description: Bhavcopy ingestion rules
+globs: ["src/aurumspread/data/**", "tests/test_data*.py"]
+alwaysApply: false
+---
+- Request date format DD/MM/YYYY; response Date is MM/DD/YYYY; ExpiryDate like 04SEP2026; strip Symbol whitespace.
+- ALWAYS compare returned Date with requested date; if different, discard and log (holiday/future/invalid). Never store the substituted day under the requested date.
+- Raw responses are saved unmodified in `data/raw/`; parsing produces `data/processed/*.parquet`. Ingestion is idempotent.
+- Be polite to MCX: rate limit (max 1 request/second), retries with backoff, cache. 
+- Unknown columns or format changes must raise a clear error, not be silently coerced. Validate against `docs/DATA_CONTRACT.md`.
+- Do not assume Close == settlement price; see DATA_CONTRACT.md "Open questions".

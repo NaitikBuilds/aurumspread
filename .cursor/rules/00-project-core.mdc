@@ -1,0 +1,11 @@
+---
+description: Core project context and conventions
+alwaysApply: true
+---
+- Read `AGENTS.md` and the docs it lists before planning any change.
+- Python 3.11, src layout (`src/aurumspread`), type hints everywhere, `ruff` + `pytest` must pass.
+- Pandas/numpy only for core logic; keep functions pure and deterministic (no hidden globals, no random without a fixed seed from config).
+- Money in INR; quantities in grams. Column/variable names carry units (e.g. `price_inr_per_g`, `qty_g`).
+- All tunable numbers live in `config/*.yaml`, never hard-coded in logic.
+- Before writing code, state the plan in 3-6 bullets and which doc section it implements. After coding, list what was tested.
+- If a requirement is ambiguous, ask one concise question instead of guessing.

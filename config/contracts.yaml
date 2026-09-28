@@ -1,0 +1,40 @@
+# Source: Hack in Hills '26 PS-03 table. Fields marked verify:true are NOT in the problem
+# statement and MUST be filled by a human from https://www.mcxindia.com/products/bullion/gold
+basis_purity: 999.0          # common pure-gold basis (see PRD 6.1). Ratios are basis-independent.
+contracts:
+  GOLDM:
+    trading_unit_g: 100
+    quote_unit_g: 10
+    purity: 995
+    expiry_window_days: [3, 5]        # day-of-month range
+    listing_from: null
+    lot_size_units: null              # verify:true
+    tick_size_inr: null               # verify:true
+    tender_period: null               # verify:true
+  GOLDTEN:
+    trading_unit_g: 10
+    quote_unit_g: 10
+    purity: 999
+    expiry_window_days: [27, 31]
+    listing_from: "2025-01-01"        # verify:true  (actual first trade date from data)
+    lot_size_units: null
+    tick_size_inr: null
+    tender_period: null
+  GOLDGUINEA:
+    trading_unit_g: 8
+    quote_unit_g: 8
+    purity: 999
+    expiry_window_days: [27, 31]
+    listing_from: null
+    lot_size_units: null
+    tick_size_inr: null
+    tender_period: null
+  GOLDPETAL:
+    trading_unit_g: 1
+    quote_unit_g: 1
+    purity: 999
+    expiry_window_days: [27, 31]
+    listing_from: null
+    lot_size_units: null
+    tick_size_inr: null
+    tender_period: null

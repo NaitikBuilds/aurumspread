@@ -1,0 +1,11 @@
+---
+description: Anti-hallucination guardrails
+alwaysApply: true
+---
+- If you are not certain about a fact (MCX spec, fee, API signature, file format), say "I am not certain" and propose how to verify. Do not fill gaps with plausible values.
+- Do not add dependencies not listed in `pyproject.toml` without asking. Never invent package names; verify on PyPI or via Context7.
+- Do not claim tests pass unless you ran them and saw the output. Paste the command and a result summary.
+- Do not report backtest results you did not compute from the code in this repo. No placeholder or "example" numbers in UI, docs, or README.
+- Do not modify files under `data/raw/` (immutable). Do not delete or weaken tests to make CI green.
+- Cite the file/section you relied on (e.g. "per docs/COST_MODEL.md section 2") when a decision depends on a doc.
+- When touching finance logic, add or update a unit test with a hand-computed expected value.

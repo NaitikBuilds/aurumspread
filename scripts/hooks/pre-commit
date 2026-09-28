@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Blocks commits made with the wrong identity or containing raw data / secrets.
+set -euo pipefail
+EXPECTED_EMAIL="naitikchandel07@gmail.com"
+EXPECTED_NAME="NaitikBuilds"
+[ "$(git config user.email)" = "$EXPECTED_EMAIL" ] || { echo "Wrong git email: $(git config user.email)"; exit 1; }
+[ "$(git config user.name)"  = "$EXPECTED_NAME"  ] || { echo "Wrong git name: $(git config user.name)"; exit 1; }
+if git diff --cached --name-only | grep -E '^data/raw/[^.]|\.env($|\.)|\.parquet$' >/dev/null; then
+  echo "Refusing to commit raw data / .env / parquet files."; exit 1
+fi

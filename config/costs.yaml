@@ -1,0 +1,13 @@
+# ALL VALUES ARE PLACEHOLDERS TO BE VERIFIED (broker contract note + MCX/SEBI circulars).
+# Report results at base, 2x and 0.5x. Do not present placeholders as facts.
+brokerage_inr_per_order: null       # verify
+exchange_txn_charge_pct: null       # verify (MCX schedule)
+ctt_pct_on_sell: null               # verify (commodity transaction tax, non-agri futures)
+sebi_fee_pct: null                  # verify
+stamp_duty_pct: null                # verify
+gst_pct_on_fees: null               # verify
+slippage:
+  model: half_spread_ticks          # half_spread_ticks | pct_of_price | volume_scaled
+  ticks_per_side: {GOLDM: 1, GOLDTEN: 2, GOLDGUINEA: 3, GOLDPETAL: 3}   # assumption, sensitivity-tested
+  thin_day_multiplier: 2.0
+stress_multipliers: [0.5, 1.0, 2.0, 3.0]

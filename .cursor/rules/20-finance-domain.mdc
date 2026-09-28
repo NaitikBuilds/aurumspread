@@ -1,0 +1,11 @@
+---
+description: Gold futures domain rules
+globs: ["src/**/*.py", "tests/**/*.py"]
+alwaysApply: false
+---
+- Normalize via `normalize.py` only: pure_price_inr_per_g = close / quote_unit_g * (basis_purity / contract_purity). Constants come from `config/contracts.yaml`.
+- GOLDM (quoted per 10 g, lot 100 g) expires ~3rd-5th; the others expire ~27th-31st. Same-named months are NOT the same date. Compare contracts only after calendar/carry alignment (PRD section 6.2).
+- Settlement/Close is not an executable price. Apply slippage + fees from `config/costs.yaml`.
+- Volume != depth. Use liquidity filters on volume AND open interest, and size positions by the thinnest leg.
+- Exclude contracts inside the exit buffer before expiry/tender window (`lifecycle.py`).
+- Positions must be gram-matched using real lot sizes; report residual gram exposure caused by lot rounding.

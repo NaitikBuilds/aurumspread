@@ -1,0 +1,18 @@
+seed: 42
+split:                       # dates are examples; finalize after data audit and freeze in DECISIONS.md
+  warmup_days: 60
+  train_end: null            # verify after data audit
+  embargo_days: 10
+  test_start: null
+zscore_window_days: 60
+entry_z: 2.0
+exit_z: 0.5
+stop_z: 4.0
+max_hold_days: 15
+exit_buffer_days_before_expiry: 5     # verify vs tender period
+liquidity:
+  min_volume_lots: null      # calibrate on train period only
+  min_open_interest_lots: null
+  max_participation_pct_of_volume: 5
+capital_inr: 1000000
+fill_rule: next_day_settlement

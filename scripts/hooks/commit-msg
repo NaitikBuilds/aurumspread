@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Enforces Conventional Commits and forbids attribution trailers.
+msg_file="$1"; first=$(head -n1 "$msg_file")
+re='^(feat|fix|docs|test|refactor|chore|perf|ci|build)(\([a-z0-9_-]+\))?: .{1,72}$'
+if ! echo "$first" | grep -Eq "$re"; then
+  echo "Commit message must look like: feat(data): add bhavcopy parser"; exit 1
+fi
+if grep -Eiq '^(Co-authored-by|Generated (with|by))' "$msg_file"; then
+  echo "Remove Co-authored-by / Generated-with trailers."; exit 1
+fi

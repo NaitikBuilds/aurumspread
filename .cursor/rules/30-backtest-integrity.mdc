@@ -1,0 +1,10 @@
+---
+description: Backtest integrity, no look-ahead
+globs: ["src/aurumspread/backtest/**", "src/aurumspread/signals/**", "tests/**"]
+alwaysApply: false
+---
+- Event loop is day-by-day: at day t compute features from data <= t, decide, and fill per BACKTEST_PROTOCOL.md (default: day t+1 settlement). Never fill at the same close that generated the signal.
+- Never fit scalers/thresholds on the full sample. Parameters are frozen before the test period; the test period is touched once for final reporting.
+- Every backtest run writes a manifest (git commit, config hash, data hash, date range) next to its outputs.
+- Required tests: (1) shuffling/removing future rows does not change past signals; (2) two runs give identical results; (3) costs strictly reduce P&L.
+- Always report: gross, net, gold-beta component, alpha component, costs, trade count, turnover, bootstrap CI. Negative results are reported as-is.
