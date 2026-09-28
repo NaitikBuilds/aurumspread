@@ -52,6 +52,8 @@ def _cfg(tmp_path: Path, **overrides: object) -> DataSourceConfig:
         "max_retries": 2,
         "backoff_base_s": 2.0,
         "raw_dir": str(tmp_path / "raw"),
+        "processed_dir": str(tmp_path / "processed"),
+        "quality": {"max_daily_jump_pct": 5.0, "universe": ["GOLDM"]},
     }
     base.update(overrides)
     return DataSourceConfig.model_validate(base)

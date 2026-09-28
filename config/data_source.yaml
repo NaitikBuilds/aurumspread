@@ -11,3 +11,7 @@ min_interval_s: 1.0                # be polite: max 1 request/second (.cursor/ru
 max_retries: 3
 backoff_base_s: 2.0                # sleep backoff_base_s ** attempt between retries
 raw_dir: data/raw                  # raw responses saved unmodified; relative to repo root
+processed_dir: data/processed      # parquet output of parse/validate/registry
+quality:
+  max_daily_jump_pct: 5.0          # DATA_CONTRACT rule 5: flag (not drop) larger day-over-day moves
+  universe: [GOLDM, GOLDTEN, GOLDGUINEA, GOLDPETAL]   # rule 2: other symbols ignored, not errored

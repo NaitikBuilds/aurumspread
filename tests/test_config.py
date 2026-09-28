@@ -430,6 +430,8 @@ VALID_DATA_SOURCE: dict[str, Any] = {
     "max_retries": 3,
     "backoff_base_s": 2.0,
     "raw_dir": "data/raw",
+    "processed_dir": "data/processed",
+    "quality": {"max_daily_jump_pct": 5.0, "universe": ["GOLDM", "GOLDTEN"]},
 }
 
 
@@ -448,6 +450,23 @@ def test_repo_data_source_yaml_loads_unconfigured() -> None:
     assert cfg.min_interval_s >= 1.0  # rule: max 1 request/second
     assert cfg.raw_dir_abs.is_absolute()
     assert cfg.raw_dir_abs.name == "raw"
+    assert cfg.processed_dir_abs.name == "processed"
+    assert cfg.quality.max_daily_jump_pct == 5.0
+    assert cfg.quality.universe == ("GOLDM", "GOLDTEN", "GOLDGUINEA", "GOLDPETAL")
+
+
+@pytest.mark.parametrize(
+    "quality",
+    [
+        {"max_daily_jump_pct": 0, "universe": ["GOLDM"]},
+        {"max_daily_jump_pct": 5, "universe": []},
+        {"max_daily_jump_pct": 5, "universe": ["goldm"]},
+        {"max_daily_jump_pct": 5, "universe": ["GOLDM", "GOLDM"]},
+    ],
+)
+def test_data_source_bad_quality_rejected(tmp_path: Path, quality: dict[str, Any]) -> None:
+    with pytest.raises(ConfigError, match="quality"):
+        load_data_source(_write(tmp_path, _ds(quality=quality), "data_source.yaml"))
 
 
 def test_data_source_configured_when_url_set(tmp_path: Path) -> None:
@@ -507,6 +526,14 @@ def test_load_all_requires_ticks_for_every_contract(tmp_path: Path) -> None:
     del costs["slippage"]["ticks_per_side"]["GOLDTEN"]
     _write(tmp_path, costs, "costs.yaml")
     with pytest.raises(ConfigError, match="GOLDTEN"):
+        load_all(tmp_path)
+
+
+def test_load_all_rejects_universe_symbol_missing_from_contracts(tmp_path: Path) -> None:
+    _write_all(tmp_path)
+    ds = _ds(quality={"max_daily_jump_pct": 5.0, "universe": ["GOLDM", "SILVERM"]})
+    _write(tmp_path, ds, "data_source.yaml")
+    with pytest.raises(ConfigError, match="SILVERM"):
         load_all(tmp_path)
 
 

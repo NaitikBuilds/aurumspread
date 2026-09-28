@@ -296,8 +296,23 @@ def load_backtest(path: Path | str | None = None) -> BacktestConfig:
 # --------------------------------------------------------------------------- data_source.yaml
 
 
+class QualityConfig(_FrozenModel):
+    """Data-quality thresholds (docs/DATA_CONTRACT.md "Validation")."""
+
+    max_daily_jump_pct: float = Field(gt=0, description="Rule 5: flag larger day-over-day moves.")
+    universe: tuple[str, ...] = Field(min_length=1, description="Rule 2: symbols to keep.")
+
+    @field_validator("universe")
+    @classmethod
+    def _check_universe(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        _check_symbol_keys(dict.fromkeys(v))
+        if len(set(v)) != len(v):
+            raise ValueError(f"duplicate symbols in universe: {list(v)}")
+        return v
+
+
 class DataSourceConfig(_FrozenModel):
-    """Bhavcopy endpoint and politeness settings (``config/data_source.yaml``).
+    """Bhavcopy endpoint, politeness and quality settings (``config/data_source.yaml``).
 
     The request shape is unknown until a human verifies it (docs/DATA_CONTRACT.md
     "Open questions"); :attr:`is_configured` gates any network call.
@@ -315,6 +330,8 @@ class DataSourceConfig(_FrozenModel):
     max_retries: int = Field(ge=0)
     backoff_base_s: float = Field(ge=0)
     raw_dir: Path = Field(description="Relative paths resolve against the repo root.")
+    processed_dir: Path = Field(description="Parquet output; relative to the repo root.")
+    quality: QualityConfig
 
     @field_validator("url_template")
     @classmethod
@@ -329,10 +346,18 @@ class DataSourceConfig(_FrozenModel):
 
     @property
     def raw_dir_abs(self) -> Path:
-        return self.raw_dir if self.raw_dir.is_absolute() else REPO_ROOT / self.raw_dir
+        return _absolute(self.raw_dir)
+
+    @property
+    def processed_dir_abs(self) -> Path:
+        return _absolute(self.processed_dir)
 
     def unverified_fields(self) -> tuple[str, ...]:
         return tuple(name for name in self.VERIFY_FIELDS if getattr(self, name) is None)
+
+
+def _absolute(path: Path) -> Path:
+    return path if path.is_absolute() else REPO_ROOT / path
 
 
 def load_data_source(path: Path | str | None = None) -> DataSourceConfig:
@@ -357,6 +382,13 @@ class AppConfig(_FrozenModel):
         missing = [s for s in self.contracts.symbols if s not in self.costs.slippage.ticks_per_side]
         if missing:
             raise ValueError(f"costs.slippage.ticks_per_side lacks contract symbols {missing}")
+        unknown = [
+            s for s in self.data_source.quality.universe if s not in self.contracts.contracts
+        ]
+        if unknown:
+            raise ValueError(
+                f"data_source.quality.universe has symbols not in contracts: {unknown}"
+            )
         return self
 
 
