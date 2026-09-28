@@ -262,6 +262,22 @@ class LiquidityConfig(_FrozenModel):
     max_participation_pct_of_volume: float = Field(gt=0, le=100)
 
 
+class AlignmentConfig(_FrozenModel):
+    """Expiry alignment and carry adjustment (PRD 6.2)."""
+
+    carry_method: Literal["front_pair", "adjacent_median"]
+    pooled_carry_fallback: bool
+    max_dte_gap_days: int = Field(ge=0)
+    constant_maturity_grid_days: tuple[int, ...] = Field(min_length=1)
+
+    @field_validator("constant_maturity_grid_days")
+    @classmethod
+    def _check_grid(cls, v: tuple[int, ...]) -> tuple[int, ...]:
+        if any(d <= 0 for d in v) or list(v) != sorted(set(v)):
+            raise ValueError(f"must be strictly increasing positive days, got {list(v)}")
+        return v
+
+
 class BacktestConfig(_FrozenModel):
     """Whole ``config/backtest.yaml``."""
 
@@ -273,6 +289,7 @@ class BacktestConfig(_FrozenModel):
     stop_z: float = Field(gt=0)
     max_hold_days: int = Field(ge=1)
     exit_buffer_days_before_expiry: int = Field(ge=0)
+    alignment: AlignmentConfig
     liquidity: LiquidityConfig
     capital_inr: float = Field(gt=0)
     fill_rule: Literal["next_day_settlement"]

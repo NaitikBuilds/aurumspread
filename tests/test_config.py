@@ -320,6 +320,12 @@ VALID_BACKTEST: dict[str, Any] = {
     "stop_z": 4.0,
     "max_hold_days": 15,
     "exit_buffer_days_before_expiry": 5,
+    "alignment": {
+        "carry_method": "front_pair",
+        "pooled_carry_fallback": True,
+        "max_dte_gap_days": 45,
+        "constant_maturity_grid_days": [30, 60, 90],
+    },
     "liquidity": {
         "min_volume_lots": None,
         "min_open_interest_lots": None,
@@ -409,6 +415,30 @@ def test_backtest_participation_over_100_rejected(tmp_path: Path) -> None:
     payload = copy.deepcopy(VALID_BACKTEST)
     payload["liquidity"]["max_participation_pct_of_volume"] = 150
     with pytest.raises(ConfigError, match="max_participation_pct_of_volume"):
+        load_backtest(_write(tmp_path, payload, "backtest.yaml"))
+
+
+def test_repo_backtest_alignment_block() -> None:
+    cfg = load_backtest()
+    assert cfg.alignment.carry_method == "front_pair"
+    assert cfg.alignment.constant_maturity_grid_days == (30, 60, 90)
+
+
+@pytest.mark.parametrize(
+    "alignment",
+    [
+        {"carry_method": "magic"},
+        {"max_dte_gap_days": -1},
+        {"constant_maturity_grid_days": []},
+        {"constant_maturity_grid_days": [60, 30]},
+        {"constant_maturity_grid_days": [30, 30]},
+        {"constant_maturity_grid_days": [0, 30]},
+    ],
+)
+def test_backtest_bad_alignment_rejected(tmp_path: Path, alignment: dict[str, Any]) -> None:
+    payload = copy.deepcopy(VALID_BACKTEST)
+    payload["alignment"].update(alignment)
+    with pytest.raises(ConfigError, match="alignment"):
         load_backtest(_write(tmp_path, payload, "backtest.yaml"))
 
 

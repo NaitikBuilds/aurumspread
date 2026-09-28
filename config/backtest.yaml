@@ -10,6 +10,11 @@ exit_z: 0.5
 stop_z: 4.0
 max_hold_days: 15
 exit_buffer_days_before_expiry: 5     # verify vs tender period
+alignment:                            # PRD 6.2 expiry alignment + carry adjustment
+  carry_method: front_pair            # front_pair | adjacent_median (slope of a family's own curve)
+  pooled_carry_fallback: true         # single-expiry family borrows the cross-family median carry
+  max_dte_gap_days: 45                # pairs farther apart in DTE than this are not formed
+  constant_maturity_grid_days: [30, 60, 90]   # analytics only; trading uses real contracts
 liquidity:
   min_volume_lots: null      # calibrate on train period only
   min_open_interest_lots: null
