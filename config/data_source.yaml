@@ -1,0 +1,13 @@
+# Bhavcopy endpoint. The URL, parameter names and headers are NOT in the problem statement.
+# A human must fill them from the PS-03 brief / MCX site and record the working request
+# shape in docs/DATA_CONTRACT.md ("Open questions"). Fetching refuses to run while url is null.
+url_template: null                 # verify:true  e.g. "https://host/path" or ".../{date}"
+method: GET                        # GET (params in query string) or POST (form body)
+params_template: {}                # verify:true  e.g. {Date: "{date}"}; "{date}" is substituted
+headers: {}                        # verify:true  User-Agent / cookies if the endpoint needs them
+request_date_format: "%d/%m/%Y"    # DD/MM/YYYY per docs/DATA_CONTRACT.md
+timeout_s: 30
+min_interval_s: 1.0                # be polite: max 1 request/second (.cursor/rules/40-data-layer)
+max_retries: 3
+backoff_base_s: 2.0                # sleep backoff_base_s ** attempt between retries
+raw_dir: data/raw                  # raw responses saved unmodified; relative to repo root

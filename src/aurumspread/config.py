@@ -293,15 +293,64 @@ def load_backtest(path: Path | str | None = None) -> BacktestConfig:
     return _validate(BacktestConfig, _read_yaml_mapping(resolved), resolved)
 
 
+# --------------------------------------------------------------------------- data_source.yaml
+
+
+class DataSourceConfig(_FrozenModel):
+    """Bhavcopy endpoint and politeness settings (``config/data_source.yaml``).
+
+    The request shape is unknown until a human verifies it (docs/DATA_CONTRACT.md
+    "Open questions"); :attr:`is_configured` gates any network call.
+    """
+
+    VERIFY_FIELDS: ClassVar[tuple[str, ...]] = ("url_template",)
+
+    url_template: str | None = Field(description="verify:true - may contain '{date}'.")
+    method: Literal["GET", "POST"]
+    params_template: dict[str, str] = Field(description="Values may contain '{date}'.")
+    headers: dict[str, str]
+    request_date_format: str = Field(min_length=1, description="strftime format, DD/MM/YYYY.")
+    timeout_s: float = Field(gt=0)
+    min_interval_s: float = Field(ge=0, description="Minimum seconds between requests.")
+    max_retries: int = Field(ge=0)
+    backoff_base_s: float = Field(ge=0)
+    raw_dir: Path = Field(description="Relative paths resolve against the repo root.")
+
+    @field_validator("url_template")
+    @classmethod
+    def _check_url(cls, v: str | None) -> str | None:
+        if v is not None and not v.startswith(("http://", "https://")):
+            raise ValueError(f"must start with http:// or https://, got {v!r}")
+        return v
+
+    @property
+    def is_configured(self) -> bool:
+        return self.url_template is not None
+
+    @property
+    def raw_dir_abs(self) -> Path:
+        return self.raw_dir if self.raw_dir.is_absolute() else REPO_ROOT / self.raw_dir
+
+    def unverified_fields(self) -> tuple[str, ...]:
+        return tuple(name for name in self.VERIFY_FIELDS if getattr(self, name) is None)
+
+
+def load_data_source(path: Path | str | None = None) -> DataSourceConfig:
+    """Load and validate ``data_source.yaml`` (default: ``config/data_source.yaml``)."""
+    resolved = Path(path) if path is not None else DEFAULT_CONFIG_DIR / "data_source.yaml"
+    return _validate(DataSourceConfig, _read_yaml_mapping(resolved), resolved)
+
+
 # --------------------------------------------------------------------------- everything
 
 
 class AppConfig(_FrozenModel):
-    """All three configs, cross-checked for consistency."""
+    """All configs, cross-checked for consistency."""
 
     contracts: ContractsConfig
     costs: CostsConfig
     backtest: BacktestConfig
+    data_source: DataSourceConfig
 
     @model_validator(mode="after")
     def _cross_check(self) -> AppConfig:
@@ -312,13 +361,14 @@ class AppConfig(_FrozenModel):
 
 
 def load_all(config_dir: Path | str | None = None) -> AppConfig:
-    """Load ``contracts.yaml``, ``costs.yaml`` and ``backtest.yaml`` from one directory."""
+    """Load all ``config/*.yaml`` files from one directory."""
     base = Path(config_dir) if config_dir is not None else DEFAULT_CONFIG_DIR
     try:
         return AppConfig(
             contracts=load_contracts(base / "contracts.yaml"),
             costs=load_costs(base / "costs.yaml"),
             backtest=load_backtest(base / "backtest.yaml"),
+            data_source=load_data_source(base / "data_source.yaml"),
         )
     except ValidationError as exc:
         raise ConfigError(f"{base}: {_format_errors(exc)}") from exc

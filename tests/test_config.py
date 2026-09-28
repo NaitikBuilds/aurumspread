@@ -17,10 +17,12 @@ from aurumspread.config import (
     ConfigError,
     ContractsConfig,
     CostsConfig,
+    DataSourceConfig,
     load_all,
     load_backtest,
     load_contracts,
     load_costs,
+    load_data_source,
 )
 
 # A minimal valid contracts.yaml payload. Values mirror the PS-03 table for two families.
@@ -415,7 +417,73 @@ def test_backtest_unknown_key_rejected(tmp_path: Path) -> None:
         load_backtest(_write(tmp_path, _bt(entry_zscore=2.0), "backtest.yaml"))
 
 
+# ================================================================== data_source.yaml
+
+VALID_DATA_SOURCE: dict[str, Any] = {
+    "url_template": None,
+    "method": "GET",
+    "params_template": {},
+    "headers": {},
+    "request_date_format": "%d/%m/%Y",
+    "timeout_s": 30,
+    "min_interval_s": 1.0,
+    "max_retries": 3,
+    "backoff_base_s": 2.0,
+    "raw_dir": "data/raw",
+}
+
+
+def _ds(**changes: Any) -> dict[str, Any]:
+    payload = copy.deepcopy(VALID_DATA_SOURCE)
+    payload.update(changes)
+    return payload
+
+
+def test_repo_data_source_yaml_loads_unconfigured() -> None:
+    cfg = load_data_source()
+    assert isinstance(cfg, DataSourceConfig)
+    # Endpoint is a human-verified fact; the repo ships it unset.
+    assert cfg.is_configured is False
+    assert cfg.unverified_fields() == ("url_template",)
+    assert cfg.min_interval_s >= 1.0  # rule: max 1 request/second
+    assert cfg.raw_dir_abs.is_absolute()
+    assert cfg.raw_dir_abs.name == "raw"
+
+
+def test_data_source_configured_when_url_set(tmp_path: Path) -> None:
+    payload = _ds(url_template="https://example.invalid/bhav", params_template={"Date": "{date}"})
+    cfg = load_data_source(_write(tmp_path, payload, "data_source.yaml"))
+    assert cfg.is_configured is True
+    assert cfg.unverified_fields() == ()
+
+
+def test_data_source_rejects_non_http_url(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="url_template"):
+        load_data_source(_write(tmp_path, _ds(url_template="ftp://x"), "data_source.yaml"))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("method", "PUT"), ("timeout_s", 0), ("min_interval_s", -1), ("max_retries", -1)],
+)
+def test_data_source_out_of_range_rejected(tmp_path: Path, field: str, value: Any) -> None:
+    with pytest.raises(ConfigError, match=field):
+        load_data_source(_write(tmp_path, _ds(**{field: value}), "data_source.yaml"))
+
+
+def test_data_source_absolute_raw_dir_kept(tmp_path: Path) -> None:
+    cfg = load_data_source(_write(tmp_path, _ds(raw_dir=str(tmp_path)), "data_source.yaml"))
+    assert cfg.raw_dir_abs == tmp_path
+
+
 # ================================================================== load_all
+
+
+def _write_all(tmp_path: Path) -> None:
+    _write(tmp_path, VALID_CONTRACTS, "contracts.yaml")
+    _write(tmp_path, VALID_COSTS, "costs.yaml")
+    _write(tmp_path, VALID_BACKTEST, "backtest.yaml")
+    _write(tmp_path, VALID_DATA_SOURCE, "data_source.yaml")
 
 
 def test_load_all_from_repo_config_dir() -> None:
@@ -424,14 +492,20 @@ def test_load_all_from_repo_config_dir() -> None:
     assert cfg.contracts.symbols == ("GOLDM", "GOLDTEN", "GOLDGUINEA", "GOLDPETAL")
     for symbol in cfg.contracts.symbols:
         assert cfg.costs.ticks_for(symbol) >= 0
+    assert cfg.data_source.is_configured is False
+
+
+def test_load_all_from_tmp_dir(tmp_path: Path) -> None:
+    _write_all(tmp_path)
+    cfg = load_all(tmp_path)
+    assert cfg.contracts.symbols == ("GOLDM", "GOLDTEN")
 
 
 def test_load_all_requires_ticks_for_every_contract(tmp_path: Path) -> None:
-    _write(tmp_path, VALID_CONTRACTS, "contracts.yaml")  # GOLDM + GOLDTEN
+    _write_all(tmp_path)
     costs = copy.deepcopy(VALID_COSTS)
     del costs["slippage"]["ticks_per_side"]["GOLDTEN"]
     _write(tmp_path, costs, "costs.yaml")
-    _write(tmp_path, VALID_BACKTEST, "backtest.yaml")
     with pytest.raises(ConfigError, match="GOLDTEN"):
         load_all(tmp_path)
 
