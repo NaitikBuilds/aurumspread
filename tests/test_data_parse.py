@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
+import numpy as np
 import pytest
 
 from aurumspread.data.dq import DQLog
 from aurumspread.data.parse import (
+    PARSED_COLUMNS,
     BhavcopyFormatError,
     format_request_date,
     normalize_symbol,
+    parse_bhavcopy_csv,
     parse_expiry_date,
     parse_response_date,
 )
@@ -89,6 +93,104 @@ def test_symbol_is_stripped_and_uppercased(raw: str) -> None:
 def test_empty_symbol_rejected() -> None:
     with pytest.raises(BhavcopyFormatError, match="empty"):
         normalize_symbol("   ")
+
+
+# ---------------------------------------------------------------- whole-file parser
+#
+# Rows below follow the DATA_CONTRACT.md formats exactly (padded symbol, MM/DD/YYYY
+# Date, DDMONYYYY expiry). They exercise parsing mechanics only and are not market
+# data; add fixture-based tests from real Bhavcopy rows under tests/fixtures/.
+
+HEADER = "Symbol,Date,ExpiryDate,Open,High,Low,Close,Volume,OpenInterest"
+
+
+def _csv(*rows: str, header: str = HEADER) -> bytes:
+    return ("\n".join([header, *rows]) + "\n").encode("utf-8")
+
+
+def test_parse_csv_types_and_columns() -> None:
+    frame = parse_bhavcopy_csv(
+        _csv(
+            "GOLDM    ,09/04/2026,05OCT2026,100000,100500,99800,100200,1500,3200",
+            " goldpetal,09/04/2026,30SEP2026,10050,10060,10040,10055,,",
+        ),
+        source_name="unit-test",
+    )
+    assert list(frame.columns) == [*PARSED_COLUMNS, "source"]
+    assert frame["symbol"].tolist() == ["GOLDM", "GOLDPETAL"]
+    assert frame["trade_date"].tolist() == [date(2026, 9, 4), date(2026, 9, 4)]
+    assert frame["expiry_date"].tolist() == [date(2026, 10, 5), date(2026, 9, 30)]
+    assert frame["close_inr"].tolist() == [100200.0, 10055.0]
+    assert frame["close_inr"].dtype == np.float64
+    # Blank Volume / OpenInterest are kept as NaN for the validator to flag as thin.
+    assert frame.loc[0, "volume"] == 1500.0
+    assert np.isnan(frame.loc[1, "volume"])
+    assert np.isnan(frame.loc[1, "open_interest"])
+    assert frame["source"].tolist() == ["unit-test", "unit-test"]
+
+
+def test_parse_csv_from_path_with_bom_and_crlf(tmp_path: Path) -> None:
+    path = tmp_path / "bhavcopy_2026-09-04.csv"
+    body = HEADER + "\r\n" + "GOLDTEN,09/04/2026,30SEP2026,1,1,1,1,1,1" + "\r\n"
+    path.write_bytes("\ufeff".encode() + body.encode("utf-8"))
+    frame = parse_bhavcopy_csv(path)
+    assert len(frame) == 1
+    assert frame.loc[0, "symbol"] == "GOLDTEN"
+    assert frame.loc[0, "source"] == str(path)
+
+
+def test_parse_csv_header_only_gives_empty_typed_frame() -> None:
+    frame = parse_bhavcopy_csv(_csv())
+    assert len(frame) == 0
+    assert list(frame.columns) == [*PARSED_COLUMNS, "source"]
+
+
+def test_parse_csv_tolerates_padded_header_names() -> None:
+    header = "Symbol, Date ,ExpiryDate,Open,High,Low,Close,Volume,OpenInterest"
+    frame = parse_bhavcopy_csv(_csv("GOLDM,09/04/2026,05OCT2026,1,1,1,1,1,1", header=header))
+    assert frame.loc[0, "trade_date"] == date(2026, 9, 4)
+
+
+def test_parse_csv_empty_payload_raises() -> None:
+    with pytest.raises(BhavcopyFormatError, match="empty"):
+        parse_bhavcopy_csv(b"")
+
+
+def test_parse_csv_missing_column_raises() -> None:
+    header = "Symbol,Date,ExpiryDate,Open,High,Low,Close,Volume"  # no OpenInterest
+    with pytest.raises(BhavcopyFormatError, match=r"missing=\['OpenInterest'\]"):
+        parse_bhavcopy_csv(_csv("GOLDM,09/04/2026,05OCT2026,1,1,1,1,1", header=header))
+
+
+def test_parse_csv_unknown_column_raises() -> None:
+    header = HEADER + ",SettlementPrice"
+    with pytest.raises(BhavcopyFormatError, match=r"unknown=\['SettlementPrice'\]"):
+        parse_bhavcopy_csv(_csv("GOLDM,09/04/2026,05OCT2026,1,1,1,1,1,1,1", header=header))
+
+
+def test_parse_csv_bad_date_raises() -> None:
+    with pytest.raises(BhavcopyFormatError, match="MM/DD/YYYY"):
+        parse_bhavcopy_csv(_csv("GOLDM,2026-09-04,05OCT2026,1,1,1,1,1,1"))
+
+
+def test_parse_csv_bad_expiry_raises() -> None:
+    with pytest.raises(BhavcopyFormatError, match="DDMONYYYY"):
+        parse_bhavcopy_csv(_csv("GOLDM,09/04/2026,2026-10-05,1,1,1,1,1,1"))
+
+
+def test_parse_csv_non_numeric_price_raises() -> None:
+    with pytest.raises(BhavcopyFormatError, match="Close: non-numeric"):
+        parse_bhavcopy_csv(_csv("GOLDM,09/04/2026,05OCT2026,1,1,1,n/a,1,1"))
+
+
+def test_parse_csv_blank_price_raises() -> None:
+    with pytest.raises(BhavcopyFormatError, match="Close: blank"):
+        parse_bhavcopy_csv(_csv("GOLDM,09/04/2026,05OCT2026,1,1,1,,1,1"))
+
+
+def test_parse_csv_non_numeric_volume_raises() -> None:
+    with pytest.raises(BhavcopyFormatError, match="Volume: non-numeric"):
+        parse_bhavcopy_csv(_csv("GOLDM,09/04/2026,05OCT2026,1,1,1,1,many,1"))
 
 
 # ---------------------------------------------------------------- DQ log
