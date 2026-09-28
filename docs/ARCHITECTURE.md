@@ -2,7 +2,7 @@
 ```
 src/aurumspread/
   data/       fetch.py parse.py validate.py registry.py dq.py cli.py  (raw -> parquet, registry)
-  core/       normalize.py calendar.py lifecycle.py carry.py prepare.py pge.py
+  core/       normalize.py calendar.py lifecycle.py carry.py term_structure.py prepare.py pge.py
   signals/    spread.py zscore.py lams.py regime.py
   backtest/   engine.py costs.py sizing.py attribution.py stats.py run.py
   app/        main.py pages/ (heatmap, curves, backtest, alerts, whatif, methodology)
