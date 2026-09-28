@@ -1,0 +1,195 @@
+"""Tests for aurumspread.config (T01: typed config loaders)."""
+
+from __future__ import annotations
+
+import copy
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+from aurumspread.config import (
+    DEFAULT_CONFIG_DIR,
+    ConfigError,
+    ContractsConfig,
+    load_contracts,
+)
+
+# A minimal valid contracts.yaml payload. Values mirror the PS-03 table for two families.
+VALID_CONTRACTS: dict[str, Any] = {
+    "basis_purity": 999.0,
+    "contracts": {
+        "GOLDM": {
+            "trading_unit_g": 100,
+            "quote_unit_g": 10,
+            "purity": 995,
+            "expiry_window_days": [3, 5],
+            "listing_from": None,
+            "lot_size_units": None,
+            "tick_size_inr": None,
+            "tender_period": None,
+        },
+        "GOLDTEN": {
+            "trading_unit_g": 10,
+            "quote_unit_g": 10,
+            "purity": 999,
+            "expiry_window_days": [27, 31],
+            "listing_from": "2025-01-01",
+            "lot_size_units": 1,
+            "tick_size_inr": 1.0,
+            "tender_period": 0,
+        },
+    },
+}
+
+
+def _write(tmp_path: Path, payload: Any, name: str = "contracts.yaml") -> Path:
+    path = tmp_path / name
+    path.write_text(yaml.safe_dump(payload), encoding="utf-8")
+    return path
+
+
+def _mutated(**changes: Any) -> dict[str, Any]:
+    """Deep-copy VALID_CONTRACTS and apply ``changes`` to the GOLDM block."""
+    payload = copy.deepcopy(VALID_CONTRACTS)
+    payload["contracts"]["GOLDM"].update(changes)
+    return payload
+
+
+# ------------------------------------------------------------------ happy path (repo file)
+
+
+def test_repo_contracts_yaml_loads() -> None:
+    cfg = load_contracts()
+    assert isinstance(cfg, ContractsConfig)
+    assert cfg.basis_purity == 999.0
+    assert cfg.symbols == ("GOLDM", "GOLDTEN", "GOLDGUINEA", "GOLDPETAL")
+    goldm = cfg.spec("GOLDM")
+    assert goldm.trading_unit_g == 100
+    assert goldm.quote_unit_g == 10
+    assert goldm.purity == 995
+    assert goldm.expiry_window_days == (3, 5)
+    assert goldm.listing_from is None
+    assert cfg.spec("GOLDTEN").listing_from == date(2025, 1, 1)
+    assert cfg.spec("GOLDPETAL").quote_unit_g == 1
+
+
+def test_default_path_points_at_repo_config_dir() -> None:
+    assert (DEFAULT_CONFIG_DIR / "contracts.yaml").is_file()
+
+
+def test_unverified_fields_reported(tmp_path: Path) -> None:
+    cfg = load_contracts(_write(tmp_path, VALID_CONTRACTS))
+    assert cfg.spec("GOLDM").unverified_fields() == (
+        "lot_size_units",
+        "tick_size_inr",
+        "tender_period",
+    )
+    assert cfg.spec("GOLDTEN").unverified_fields() == ()
+
+
+def test_config_is_frozen(tmp_path: Path) -> None:
+    cfg = load_contracts(_write(tmp_path, VALID_CONTRACTS))
+    with pytest.raises(ValueError):
+        cfg.spec("GOLDM").purity = 1  # type: ignore[misc]
+
+
+def test_unknown_symbol_lookup_raises(tmp_path: Path) -> None:
+    cfg = load_contracts(_write(tmp_path, VALID_CONTRACTS))
+    with pytest.raises(ConfigError, match="SILVERM"):
+        cfg.spec("SILVERM")
+
+
+# ------------------------------------------------------------------ file-level failures
+
+
+def test_missing_file_raises_with_path(tmp_path: Path) -> None:
+    missing = tmp_path / "nope.yaml"
+    with pytest.raises(ConfigError, match="nope.yaml"):
+        load_contracts(missing)
+
+
+def test_empty_file_raises(tmp_path: Path) -> None:
+    path = tmp_path / "contracts.yaml"
+    path.write_text("", encoding="utf-8")
+    with pytest.raises(ConfigError, match="mapping"):
+        load_contracts(path)
+
+
+def test_invalid_yaml_raises(tmp_path: Path) -> None:
+    path = tmp_path / "contracts.yaml"
+    path.write_text("contracts: [unclosed", encoding="utf-8")
+    with pytest.raises(ConfigError, match="invalid YAML"):
+        load_contracts(path)
+
+
+# ------------------------------------------------------------------ field-level failures
+
+
+def test_missing_required_field_names_field(tmp_path: Path) -> None:
+    payload = copy.deepcopy(VALID_CONTRACTS)
+    del payload["contracts"]["GOLDM"]["quote_unit_g"]
+    with pytest.raises(ConfigError, match=r"contracts\.GOLDM\.quote_unit_g"):
+        load_contracts(_write(tmp_path, payload))
+
+
+def test_missing_verify_key_is_still_required(tmp_path: Path) -> None:
+    payload = copy.deepcopy(VALID_CONTRACTS)
+    del payload["contracts"]["GOLDM"]["lot_size_units"]
+    with pytest.raises(ConfigError, match="lot_size_units"):
+        load_contracts(_write(tmp_path, payload))
+
+
+def test_unknown_key_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="lot_size"):
+        load_contracts(_write(tmp_path, _mutated(lot_size=1)))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("quote_unit_g", 0),
+        ("trading_unit_g", -100),
+        ("purity", 0),
+        ("purity", 1001),
+        ("lot_size_units", 0),
+        ("tick_size_inr", -1),
+        ("tender_period", -1),
+    ],
+)
+def test_out_of_range_values_rejected(tmp_path: Path, field: str, value: Any) -> None:
+    with pytest.raises(ConfigError, match=field):
+        load_contracts(_write(tmp_path, _mutated(**{field: value})))
+
+
+@pytest.mark.parametrize("window", [[5, 3], [0, 5], [27, 32], [3], [3, 4, 5]])
+def test_bad_expiry_window_rejected(tmp_path: Path, window: list[int]) -> None:
+    with pytest.raises(ConfigError, match="expiry_window_days"):
+        load_contracts(_write(tmp_path, _mutated(expiry_window_days=window)))
+
+
+def test_bad_listing_date_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="listing_from"):
+        load_contracts(_write(tmp_path, _mutated(listing_from="not-a-date")))
+
+
+def test_lowercase_symbol_rejected(tmp_path: Path) -> None:
+    payload = copy.deepcopy(VALID_CONTRACTS)
+    payload["contracts"]["goldm "] = payload["contracts"].pop("GOLDM")
+    with pytest.raises(ConfigError, match="upper-case"):
+        load_contracts(_write(tmp_path, payload))
+
+
+def test_empty_universe_rejected(tmp_path: Path) -> None:
+    payload = {"basis_purity": 999.0, "contracts": {}}
+    with pytest.raises(ConfigError, match="contracts"):
+        load_contracts(_write(tmp_path, payload))
+
+
+def test_bad_basis_purity_rejected(tmp_path: Path) -> None:
+    payload = copy.deepcopy(VALID_CONTRACTS)
+    payload["basis_purity"] = 0
+    with pytest.raises(ConfigError, match="basis_purity"):
+        load_contracts(_write(tmp_path, payload))
