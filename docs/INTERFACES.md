@@ -87,6 +87,40 @@ z-score. Percentile is still defined when sigma is zero.
 | `zscore` | float64 | `(spread - mean) / sigma`; NaN if undefined |
 | `percentile_rank` | float64 | fraction of the window `<=` the current spread, in `(0, 1]` |
 
+## Locked: T08 round-trip cost
+
+Returned by `backtest.estimate_round_trip_cost`. Not a table. INR fields are
+`float` or `None`. `None` means a `verify` rate or `tick_size_inr` is null;
+it is not zero. `missing` lists those names. `cost_inr_per_g` divides
+`total_inr` by the caller-supplied `qty_g`.
+
+| field | dtype | meaning |
+|---|---|---|
+| `slippage_inr` | float or None | ticks × tick size, thin days multiplied, both legs, entry and exit |
+| `brokerage_inr` | float or None | flat INR per order × 4 |
+| `exchange_inr` | float or None | `exchange_txn_charge_pct / 100` × traded value, every fill |
+| `ctt_inr` | float or None | sell fills only |
+| `sebi_inr` | float or None | every fill |
+| `stamp_inr` | float or None | buy fills only |
+| `gst_inr` | float or None | `gst_pct_on_fees / 100` × (brokerage + exchange + SEBI) |
+| `total_inr` | float or None | sum of the rows above, after `multiplier` |
+| `cost_inr_per_g` | float or None | `total_inr / qty_g` |
+| `missing` | tuple of str | unverified inputs |
+| `multiplier` | float | stress multiple |
+
+## Locked: T08 sized pair
+
+Returned by `backtest.size_pair`. Grams are signed (long positive). While
+`lot_size_units` is null, lot counts and grams are `None` and `missing` names
+the symbol. Grams per lot = `trading_unit_g * lot_size_units`.
+
+| field | dtype |
+|---|---|
+| `lots_a`, `lots_b` | int or None |
+| `qty_g_a`, `qty_g_b` | float or None |
+| `residual_g` | float or None |
+| `missing` | tuple of str |
+
 ## Proposed: trade log (T09, not implemented)
 
 Grain: one round trip. Fills are `settle_{t+1}` plus slippage
