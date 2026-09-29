@@ -121,36 +121,42 @@ the symbol. Grams per lot = `trading_unit_g * lot_size_units`.
 | `residual_g` | float or None |
 | `missing` | tuple of str |
 
-## Proposed: trade log (T09, not implemented)
+## Locked: trade log (T09)
 
-Grain: one round trip. Fills are `settle_{t+1}` plus slippage
-(`docs/COST_MODEL.md`). Fee amounts stay null until `config/costs.yaml`
-`verify` fields and `tick_size_inr` are filled from MCX/broker sources.
-No numeric fee is invented here.
+Returned by `backtest.walk_forward` as `WalkForwardResult.trades`. One row per
+closed round trip. A signal on day t is filled on the next session date in the
+frame. `cost_inr` is None when a fee or tick size is still null; the engine
+does not open that trade. Dates are `datetime.date`.
 
 | column | dtype | unit / values |
 |---|---|---|
-| `trade_id` | int64 | unique within a run |
+| `trade_id` | int | unique within a run, starting at 1 |
 | `symbol_a` | str | |
 | `expiry_a` | object (`datetime.date`) | |
 | `symbol_b` | str | |
 | `expiry_b` | object (`datetime.date`) | |
 | `signal_date` | object (`datetime.date`) | close t that opened the trade |
-| `entry_fill_date` | object (`datetime.date`) | t+1 |
+| `entry_fill_date` | object (`datetime.date`) | next session after `signal_date` |
 | `exit_signal_date` | object (`datetime.date`) | |
-| `exit_fill_date` | object (`datetime.date`) | |
+| `exit_fill_date` | object (`datetime.date`) | next session, or the same day for `exit_buffer` |
 | `side` | str | `long_spread` (buy A, sell B) or `short_spread` |
-| `qty_g_a` | float64 | signed grams of the actual A contract |
-| `qty_g_b` | float64 | signed grams of the actual B contract |
-| `residual_g` | float64 | `qty_g_a + qty_g_b` after lot rounding |
-| `entry_fill_a_inr_per_g` | float64 | |
-| `entry_fill_b_inr_per_g` | float64 | |
-| `exit_fill_a_inr_per_g` | float64 | |
-| `exit_fill_b_inr_per_g` | float64 | |
-| `gross_pnl_inr` | float64 | INR, before costs |
-| `cost_inr` | float64 | fees + slippage, INR |
-| `net_pnl_inr` | float64 | `gross_pnl_inr - cost_inr` |
+| `qty_g_a` | float | signed grams |
+| `qty_g_b` | float | signed grams |
+| `residual_g` | float | `qty_g_a + qty_g_b` |
+| `entry_fill_a_inr_per_g` | float | |
+| `entry_fill_b_inr_per_g` | float | |
+| `exit_fill_a_inr_per_g` | float | |
+| `exit_fill_b_inr_per_g` | float | |
+| `gross_pnl_inr` | float | `sum qty_g * price change` |
+| `cost_inr` | float or None | fees + slippage, entry and exit |
+| `net_pnl_inr` | float or None | `gross_pnl_inr - cost_inr` |
 | `exit_reason` | str | `exit_z`, `stop_z`, `max_hold`, `exit_buffer` |
+
+## Locked: run manifest (T09)
+
+`RunManifest` has no timestamp. `config_sha256` covers backtest, costs, and
+contracts plus `target_g` and the cost multiplier. `inputs_sha256` covers the
+signal frame. `git_commit` is whatever the caller passes in.
 
 ## Proposed: daily attribution (T10, not implemented)
 
