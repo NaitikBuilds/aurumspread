@@ -13,7 +13,7 @@ from aurumspread.backtest.liquidity import (
     filter_liquid,
     passes_liquidity,
 )
-from aurumspread.backtest.manifest import RunManifest
+from aurumspread.backtest.manifest import RunManifest, RunStamp, stamp_run
 from aurumspread.backtest.sizing import SizedPair, size_pair
 
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "OrderCost",
     "RoundTripCost",
     "RunManifest",
+    "RunStamp",
     "SizedPair",
     "WalkForwardResult",
     "cap_to_participation",
@@ -29,5 +30,6 @@ __all__ = [
     "order_cost_inr",
     "passes_liquidity",
     "size_pair",
+    "stamp_run",
     "walk_forward",
 ]

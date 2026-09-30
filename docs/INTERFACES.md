@@ -124,9 +124,15 @@ the symbol. Grams per lot = `trading_unit_g * lot_size_units`.
 ## Locked: trade log (T09)
 
 Returned by `backtest.walk_forward` as `WalkForwardResult.trades`. One row per
-closed round trip. A signal on day t is filled on the next session date in the
-frame. `cost_inr` is None when a fee or tick size is still null; the engine
+closed round trip. A signal on day t is filled on the next session from
+`core.calendar.TradingCalendar` (not the next pair-row in the signal frame).
+`cost_inr` is None when a fee or tick size is still null; the engine
 does not open that trade. Dates are `datetime.date`.
+
+Skipped entries are rows in `WalkForwardResult.skips` with `reason` in
+`warmup`, `embargo`, `test_locked`, `not_live`, `liquidity`, `unverified_lots`,
+`unverified_costs`, `no_next_session`, `missing_fill_bar`. Counts by reason are
+`WalkForwardResult.skip_counts` and `RunManifest.skip_counts`.
 
 | column | dtype | unit / values |
 |---|---|---|
@@ -136,7 +142,7 @@ does not open that trade. Dates are `datetime.date`.
 | `symbol_b` | str | |
 | `expiry_b` | object (`datetime.date`) | |
 | `signal_date` | object (`datetime.date`) | close t that opened the trade |
-| `entry_fill_date` | object (`datetime.date`) | next session after `signal_date` |
+| `entry_fill_date` | object (`datetime.date`) | next **trading** session after `signal_date` |
 | `exit_signal_date` | object (`datetime.date`) | |
 | `exit_fill_date` | object (`datetime.date`) | next session, or the same day for `exit_buffer` |
 | `side` | str | `long_spread` (buy A, sell B) or `short_spread` |
@@ -154,9 +160,11 @@ does not open that trade. Dates are `datetime.date`.
 
 ## Locked: run manifest (T09)
 
-`RunManifest` has no timestamp. `config_sha256` covers backtest, costs, and
-contracts plus `target_g` and the cost multiplier. `inputs_sha256` covers the
-signal frame. `git_commit` is whatever the caller passes in.
+`RunManifest` has no timestamp and no git SHA. `config_sha256` covers backtest,
+costs, contracts, `target_g`, the cost multiplier, `allow_test`, and the
+trading-calendar dates used for fills. `inputs_sha256` covers the signal frame.
+`skip_counts` is a sorted tuple of `(reason, n)` pairs. Git SHA and wall clock
+belong on `RunStamp` from `backtest.stamp_run` at the I/O edge only.
 
 ## Proposed: daily attribution (T10, not implemented)
 

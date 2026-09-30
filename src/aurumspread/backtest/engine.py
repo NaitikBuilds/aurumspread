@@ -1,8 +1,9 @@
 """Walk-forward engine (docs/BACKTEST_PROTOCOL.md rules 1–7, task T09).
 
 On day t the engine may read that day's row only. A signal at the close of t
-is filled on the next session date in the frame. Exit-buffer exits fill on
-the same day, because that session is already inside the forced-exit window.
+is filled on the next session from ``TradingCalendar``, not the next pair-row
+in the signal frame. Exit-buffer exits fill on the same day, and that trigger
+uses listing + days-to-expiry only (Person 1 ``contract_status``).
 
 An entry is skipped when lot size or fee inputs are still null, when either
 leg fails the liquidity check, or when the date is warmup, embargo, or an
@@ -15,6 +16,7 @@ and manifest. It does not read the clock or the git repository.
 from __future__ import annotations
 
 import math
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
@@ -26,6 +28,8 @@ from aurumspread.backtest.liquidity import passes_liquidity
 from aurumspread.backtest.manifest import RunManifest, config_sha256, frame_sha256
 from aurumspread.backtest.sizing import SizedPair, size_pair
 from aurumspread.config import BacktestConfig, ContractsConfig, CostsConfig
+from aurumspread.core.calendar import TradingCalendar
+from aurumspread.core.lifecycle import contract_status
 
 Side = Literal["long_spread", "short_spread"]
 Phase = Literal["warmup", "train", "embargo", "test"]
@@ -85,6 +89,7 @@ class WalkForwardResult:
 
     trades: pd.DataFrame
     skips: pd.DataFrame
+    skip_counts: dict[str, int]
     manifest: RunManifest
 
 
@@ -122,12 +127,14 @@ def walk_forward(
     target_g: float,
     multiplier: float = 1.0,
     allow_test: bool = False,
-    git_commit: str | None = None,
+    calendar: TradingCalendar | None = None,
 ) -> WalkForwardResult:
     """Run the day loop on a signal frame that already contains z-scores.
 
     ``target_g`` is the gram target passed to :func:`size_pair`. ``allow_test``
     may be true only after ``backtest.split`` has frozen train and test dates.
+    ``calendar`` is the session grid for fills; when omitted it is the distinct
+    ``trade_date`` values in ``signals``.
     """
     if allow_test and not backtest.split.is_frozen:
         raise ValueError("allow_test requires frozen train_end and test_start")
@@ -136,12 +143,38 @@ def walk_forward(
     missing = [column for column in _REQUIRED if column not in signals.columns]
     if missing:
         raise KeyError(f"signals frame lacks columns {missing}")
+    if signals.empty and calendar is None:
+        empty_manifest = RunManifest(
+            config_sha256=config_sha256(
+                backtest,
+                costs,
+                contracts,
+                target_g=target_g,
+                multiplier=multiplier,
+                allow_test=allow_test,
+                calendar_dates=(),
+            ),
+            inputs_sha256=frame_sha256(signals),
+            start_date=None,
+            end_date=None,
+            seed=backtest.seed,
+            n_trades=0,
+            n_skips=0,
+            skip_counts=(),
+            split_frozen=backtest.split.is_frozen,
+        )
+        return WalkForwardResult(
+            trades=_as_frame([], TRADE_COLUMNS),
+            skips=_as_frame([], SKIP_COLUMNS),
+            skip_counts={},
+            manifest=empty_manifest,
+        )
 
     frame = signals.copy()
     frame["trade_date"] = frame["trade_date"].map(_as_date)
     for column in ("expiry_a", "expiry_b"):
         frame[column] = frame[column].map(_as_date)
-    dates = sorted(set(frame["trade_date"]))
+    sessions = _sessions(frame, calendar)
     rows = {
         _pair_key(row): row
         for _, row in frame.sort_values(["trade_date", *_PAIR], kind="mergesort").iterrows()
@@ -153,15 +186,23 @@ def walk_forward(
     trades: list[dict] = []
     skips: list[dict] = []
 
-    for today in dates:
+    for today in sessions.dates:
         _apply_entries(today, rows, pending, open_positions, skips)
         _apply_scheduled_exits(today, rows, open_positions, trades, costs, contracts, multiplier)
         _force_or_schedule_exits(
-            today, dates, rows, open_positions, trades, costs, contracts, backtest, multiplier
+            today,
+            sessions,
+            rows,
+            open_positions,
+            trades,
+            costs,
+            contracts,
+            backtest,
+            multiplier,
         )
         _schedule_entries(
             today,
-            dates,
+            sessions,
             rows,
             pairs,
             pending,
@@ -175,8 +216,9 @@ def walk_forward(
             allow_test,
         )
 
+    skip_counts = dict(sorted(Counter(row["reason"] for row in skips).items()))
+    dates = sessions.dates
     manifest = RunManifest(
-        git_commit=git_commit,
         config_sha256=config_sha256(
             backtest,
             costs,
@@ -184,6 +226,7 @@ def walk_forward(
             target_g=target_g,
             multiplier=multiplier,
             allow_test=allow_test,
+            calendar_dates=tuple(dates),
         ),
         inputs_sha256=frame_sha256(frame),
         start_date=dates[0] if dates else None,
@@ -191,18 +234,20 @@ def walk_forward(
         seed=backtest.seed,
         n_trades=len(trades),
         n_skips=len(skips),
+        skip_counts=tuple(skip_counts.items()),
         split_frozen=backtest.split.is_frozen,
     )
     return WalkForwardResult(
         trades=_as_frame(trades, TRADE_COLUMNS),
         skips=_as_frame(skips, SKIP_COLUMNS),
+        skip_counts=skip_counts,
         manifest=manifest,
     )
 
 
 def _schedule_entries(
     today: date,
-    dates: list[date],
+    calendar: TradingCalendar,
     rows: dict,
     pairs: list[tuple],
     pending: dict[tuple, _PendingEntry],
@@ -215,7 +260,7 @@ def _schedule_entries(
     multiplier: float,
     allow_test: bool,
 ) -> None:
-    phase = _phase(today, dates, backtest)
+    phase = _phase(today, calendar, backtest)
     for pair in pairs:
         if pair in open_positions or pair in pending:
             continue
@@ -232,7 +277,7 @@ def _schedule_entries(
         if reason is not None:
             skips.append(_skip(today, pair, reason))
             continue
-        fill_date = _next_date(dates, today)
+        fill_date = calendar.next_trading_day(today)
         if fill_date is None:
             skips.append(_skip(today, pair, "no_next_session"))
             continue
@@ -347,7 +392,7 @@ def _apply_scheduled_exits(
 
 def _force_or_schedule_exits(
     today: date,
-    dates: list[date],
+    calendar: TradingCalendar,
     rows: dict,
     open_positions: dict[tuple, _Position],
     trades: list[dict],
@@ -362,17 +407,15 @@ def _force_or_schedule_exits(
         row = rows.get((today, *pair))
         if row is None:
             continue
-        held = sum(1 for day in dates if position.entry_fill_date <= day <= today)
-        reason = _exit_reason(
-            _finite(row["zscore"]),
-            held,
-            str(row["status_a"]),
-            str(row["status_b"]),
-            backtest,
-        )
+        held = 1 + calendar.trading_days_between(position.entry_fill_date, today)
+        if _calendar_forced_exit(today, pair, contracts, backtest):
+            reason = "exit_buffer"
+        else:
+            reason = _price_exit(_finite(row["zscore"]), held, backtest)
         if reason is None:
             continue
-        if reason == "exit_buffer" or _next_date(dates, today) is None:
+        next_session = calendar.next_trading_day(today)
+        if reason == "exit_buffer" or next_session is None:
             position.exit_reason = reason
             position.exit_signal_date = today
             position.exit_fill_date = today
@@ -381,7 +424,7 @@ def _force_or_schedule_exits(
             continue
         position.exit_reason = reason
         position.exit_signal_date = today
-        position.exit_fill_date = _next_date(dates, today)
+        position.exit_fill_date = next_session
 
 
 def _close(
@@ -497,15 +540,21 @@ def _leg_costs(
     return total
 
 
-def _exit_reason(
-    zscore: float | None,
-    held: int,
-    status_a: str,
-    status_b: str,
+def _calendar_forced_exit(
+    today: date,
+    pair: tuple,
+    contracts: ContractsConfig,
     backtest: BacktestConfig,
-) -> str | None:
-    if status_a != "live" or status_b != "live":
-        return "exit_buffer"
+) -> bool:
+    """True when either leg is outside the live window (listing + DTE, not prices)."""
+    buffer = backtest.exit_buffer_days_before_expiry
+    symbol_a, expiry_a, symbol_b, expiry_b = pair
+    status_a = contract_status(today, expiry_a, contracts.spec(symbol_a), buffer)
+    status_b = contract_status(today, expiry_b, contracts.spec(symbol_b), buffer)
+    return status_a != "live" or status_b != "live"
+
+
+def _price_exit(zscore: float | None, held: int, backtest: BacktestConfig) -> str | None:
     if zscore is not None and abs(zscore) >= backtest.stop_z:
         return "stop_z"
     if held >= backtest.max_hold_days:
@@ -515,8 +564,8 @@ def _exit_reason(
     return None
 
 
-def _phase(today: date, dates: list[date], backtest: BacktestConfig) -> Phase:
-    if dates.index(today) < backtest.split.warmup_days:
+def _phase(today: date, calendar: TradingCalendar, backtest: BacktestConfig) -> Phase:
+    if calendar.dates.index(today) < backtest.split.warmup_days:
         return "warmup"
     split = backtest.split
     if not split.is_frozen or split.train_end is None or split.test_start is None:
@@ -528,11 +577,14 @@ def _phase(today: date, dates: list[date], backtest: BacktestConfig) -> Phase:
     return "test"
 
 
-def _next_date(dates: list[date], today: date) -> date | None:
-    index = dates.index(today)
-    if index + 1 >= len(dates):
-        return None
-    return dates[index + 1]
+def _sessions(frame: pd.DataFrame, calendar: TradingCalendar | None) -> TradingCalendar:
+    frame_dates = {date_ for date_ in frame["trade_date"]}
+    if calendar is None:
+        return TradingCalendar(frame_dates)
+    extra = sorted(frame_dates - set(calendar.dates))
+    if extra:
+        raise ValueError(f"signal dates not on the trading calendar: {extra[:5]}")
+    return calendar
 
 
 def _pair_key(row: pd.Series) -> tuple:

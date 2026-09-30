@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -18,9 +18,8 @@ from aurumspread.config import BacktestConfig, ContractsConfig, CostsConfig
 
 @dataclass(frozen=True)
 class RunManifest:
-    """Identity of one engine run. ``git_commit`` is supplied by the caller."""
+    """Identity of one engine run. No clock and no git object."""
 
-    git_commit: str | None
     config_sha256: str
     inputs_sha256: str
     start_date: date | None
@@ -28,7 +27,23 @@ class RunManifest:
     seed: int
     n_trades: int
     n_skips: int
+    skip_counts: tuple[tuple[str, int], ...]
     split_frozen: bool
+
+
+@dataclass(frozen=True)
+class RunStamp:
+    """Git SHA and wall clock from the I/O edge. The engine never builds this."""
+
+    git_commit: str | None
+    recorded_at: datetime | None
+
+
+def stamp_run(
+    *, git_commit: str | None = None, recorded_at: datetime | None = None
+) -> RunStamp:
+    """Attach identity the caller already has. Does not read git or the clock."""
+    return RunStamp(git_commit=git_commit, recorded_at=recorded_at)
 
 
 def config_sha256(
@@ -39,11 +54,13 @@ def config_sha256(
     target_g: float,
     multiplier: float,
     allow_test: bool,
+    calendar_dates: tuple[date, ...] = (),
 ) -> str:
     """SHA-256 of the config objects and the run arguments that affect trades."""
     payload = {
         "allow_test": allow_test,
         "backtest": backtest.model_dump(mode="json"),
+        "calendar": [day.isoformat() for day in calendar_dates],
         "contracts": contracts.model_dump(mode="json"),
         "costs": costs.model_dump(mode="json"),
         "multiplier": multiplier,
