@@ -307,7 +307,7 @@ def test_skipped_entries_are_counted_by_reason() -> None:
     backtest, costs, contracts = _configs()
     liquid = backtest.model_copy(
         update={
-            "liquidity": backtest.liquidity.model_copy(update={"min_volume_lots": 100.0}),
+            "liquidity": backtest.liquidity.model_copy(update={"min_volume_lots": 100}),
         }
     )
     result = walk_forward(
