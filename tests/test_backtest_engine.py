@@ -297,7 +297,10 @@ def test_missing_row_does_not_fill_the_next_pair_bar() -> None:
     result = _run(pd.DataFrame(rows), calendar=calendar)
     assert result.trades.empty
     assert result.skip_counts["missing_fill_bar"] >= 1
-    assert ("missing_fill_bar", result.skip_counts["missing_fill_bar"]) in result.manifest.skip_counts
+    assert (
+        "missing_fill_bar",
+        result.skip_counts["missing_fill_bar"],
+    ) in result.manifest.skip_counts
 
 
 def test_skipped_entries_are_counted_by_reason() -> None:

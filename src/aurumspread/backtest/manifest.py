@@ -39,9 +39,7 @@ class RunStamp:
     recorded_at: datetime | None
 
 
-def stamp_run(
-    *, git_commit: str | None = None, recorded_at: datetime | None = None
-) -> RunStamp:
+def stamp_run(*, git_commit: str | None = None, recorded_at: datetime | None = None) -> RunStamp:
     """Attach identity the caller already has. Does not read git or the clock."""
     return RunStamp(git_commit=git_commit, recorded_at=recorded_at)
 
