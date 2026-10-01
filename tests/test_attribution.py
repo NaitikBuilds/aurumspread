@@ -607,13 +607,23 @@ def test_flag_residual_outliers_and_backtest_yaml_tolerance() -> None:
         contracts=contracts,
     )
 
-    # With default tolerance 0.01: Day 4 has |0.50| > 0.01, so it is flagged
-    flagged = flag_residual_outliers(attr, tolerance=cfg.residual_tolerance_inr)
-    assert len(flagged) == 1
-    assert flagged.iloc[0]["trade_date"] == DAYS[3]
-    assert flagged.iloc[0]["residual_inr"] == pytest.approx(0.50)
+    # 1. Takes tolerance directly from BacktestConfig keyword argument
+    flagged_from_cfg = flag_residual_outliers(attr, backtest=cfg)
+    assert len(flagged_from_cfg) == 1
+    assert flagged_from_cfg.iloc[0]["trade_date"] == DAYS[3]
+    assert flagged_from_cfg.iloc[0]["residual_inr"] == pytest.approx(0.50)
 
-    # With wide tolerance 1.0: |0.50| <= 1.0, no days are flagged
+    # 2. Passes BacktestConfig positionally
+    flagged_pos = flag_residual_outliers(attr, cfg)
+    assert len(flagged_pos) == 1
+    assert flagged_pos.iloc[0]["trade_date"] == DAYS[3]
+
+    # 3. Default without arguments pulls tolerance from BacktestConfig
+    flagged_default = flag_residual_outliers(attr)
+    assert len(flagged_default) == 1
+    assert flagged_default.iloc[0]["trade_date"] == DAYS[3]
+
+    # 4. With wide tolerance 1.0 override: |0.50| <= 1.0, no days are flagged
     not_flagged = flag_residual_outliers(attr, tolerance=1.0)
     assert not_flagged.empty
 

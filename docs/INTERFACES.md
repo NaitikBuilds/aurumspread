@@ -241,3 +241,12 @@ This proposal requires Person 1 / Person 3 approval.
    proposes front-month gold outright price change as default (isolates macro
    beta from residual grams) with 0.0 as explicit override (beta zero by
    construction). Needs Person 1/3 sign-off on the reference symbol/roll schedule.
+6. Person 1: `residual_tolerance_inr` was added to `BacktestConfig` and
+   `config/backtest.yaml` (configured at 0.01 INR). In `BacktestConfig`, other fields
+   such as `capital_inr` and `fill_rule` are required with no default, while
+   unknown YAML keys are strictly forbidden by `_FrozenModel` (`extra='forbid'`).
+   `residual_tolerance_inr` currently defaults to 0.01 (`ge=0`) to preserve backward
+   compatibility with minimal test fixtures and partial configs. If Person 1
+   prefers strict schema uniformity across all backtest fields (i.e. requiring
+   explicit specification in all configs with no default), please confirm and
+   Person 2 will remove the default.
