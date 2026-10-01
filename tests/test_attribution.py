@@ -348,12 +348,27 @@ def test_zero_pnl_trade_identity() -> None:
     assert attr["total_pnl_inr"].sum() == pytest.approx(-trade["cost_inr"])
 
 
-def test_same_day_entry_and_exit_attribution() -> None:
-    """Exit buffer triggers exit on the same day as fill."""
+def test_walk_forward_same_session_exit_buffer_trade() -> None:
+    """Exit buffer triggers same-session exit in walk_forward engine on 2026-01-07.
+
+    Signal generated on 2026-01-06 (zscore=3.0 after 3-day warmup Jan 1-3).
+    Next trading session is 2026-01-07.
+    On 2026-01-07:
+      - Entry fills at Jan 7 closing settlement prices (10.0 INR/g).
+      - On the same session, expiry_b (2026-01-12) has DTE = 5 calendar days.
+      - exit_buffer_days_before_expiry = 5 fires immediately.
+      - Exit fills on the same session (2026-01-07) at Jan 7 settlement prices (10.0 INR/g).
+
+    Because daily settlement bars price both fills at the same session close,
+    entry_fill == exit_fill, so gross_pnl_inr == 0.0 by construction.
+    Total P&L is -cost_inr (fees only).
+    In attribution, dp_sig taken from fills is 0.0, alpha and beta are 0.0,
+    and residual_inr is 0.0 by construction.
+    """
     days = [date(2026, 1, day) for day in range(1, 11)]
     expiry_b = date(2026, 1, 12)
-    # Buffer is 5 days before 12 Jan -> 7 Jan is exit buffer
-    zscores = [0.0, 0.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0]
+    # Jan 1, 2, 3: warmup. Jan 4, 5: no signal (0.0). Jan 6: signal (3.0).
+    zscores = [0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0]
     rows = [
         {
             "trade_date": day,
@@ -377,12 +392,35 @@ def test_same_day_entry_and_exit_attribution() -> None:
     ]
     frame = pd.DataFrame(rows)
     result = _run(frame)
+
+    assert len(result.trades) == 1
     trade = result.trades.iloc[0]
+    # Signal on Jan 6, fills entry and exits on Jan 7
+    assert trade["signal_date"] == date(2026, 1, 6)
+    assert trade["entry_fill_date"] == date(2026, 1, 7)
+    assert trade["exit_signal_date"] == date(2026, 1, 7)
+    assert trade["exit_fill_date"] == date(2026, 1, 7)
     assert trade["exit_reason"] == "exit_buffer"
 
+    # Both entry and exit fills use Jan 7 settlement prices
+    assert trade["entry_fill_a_inr_per_g"] == trade["exit_fill_a_inr_per_g"]
+    assert trade["entry_fill_b_inr_per_g"] == trade["exit_fill_b_inr_per_g"]
+    assert trade["gross_pnl_inr"] == pytest.approx(0.0)
+    assert trade["cost_inr"] > 0.0
+    assert trade["net_pnl_inr"] == pytest.approx(-trade["cost_inr"])
+
+    # Attribution: 1 session active (Jan 7)
     attr = result.attribution
+    assert len(attr) == 1
+    row = attr.iloc[0]
+    assert row["trade_date"] == date(2026, 1, 7)
+    assert row["beta_inr"] == 0.0
+    assert row["alpha_inr"] == 0.0
+    assert row["carry_inr"] == 0.0
+    assert row["cost_inr"] == pytest.approx(-trade["cost_inr"])
+    assert row["total_pnl_inr"] == pytest.approx(-trade["cost_inr"])
+    assert row["residual_inr"] == 0.0
     assert verify_attribution_identity(attr)
-    assert attr["total_pnl_inr"].sum() == pytest.approx(result.trades["net_pnl_inr"].sum())
 
 
 def test_same_session_trade_carries_gross_pnl_in_alpha_beta_not_residual() -> None:
