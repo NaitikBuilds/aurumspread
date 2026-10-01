@@ -286,7 +286,31 @@ Task T11 defines the statistical validation battery and automated verdict logic
 evaluating strategy performance and robustness. It consumes the closed trade log
 (`trades`) and daily attribution series (`attribution`) produced by `walk_forward`.
 
-### 1. Stats Battery Specifications & Mathematical Definitions
+### 1. Protocol Mandate & Reconciliation (docs/BACKTEST_PROTOCOL.md)
+
+The backtest protocol states (`docs/BACKTEST_PROTOCOL.md`, lines 12–20):
+> ## Validation battery (all reported, pass or fail)
+> - Net Sharpe/Sortino, max drawdown, hit rate, avg trade net INR, turnover, trade count.
+> - Bootstrap (block) 95% CI on mean daily net P&L; permutation/placebo test (shuffled entry dates, random pairs).
+> - Baselines: always-flat, random-entry, naive spread threshold without liquidity/carry adjustments.
+> - Regression of daily strategy P&L on gold return: beta, alpha t-stat.
+> - Cost sensitivity + break-even cost multiple. Parameter-stability grid (neighbors of chosen params must not flip sign).
+> - Multiple-testing note: count of pairs/params tried, adjust (e.g. Bonferroni/Deflated Sharpe).
+> ## Verdict logic
+> Edge claimed only if net alpha CI excludes zero on TEST at 1x costs AND survives 2x costs at a reduced level AND beats placebo. Otherwise verdict = "no persistent edge after costs".
+
+**Reconciliation Principles:**
+1. **Protocol wins where it speaks:**
+   - The validation battery computes and reports all protocol metrics: Net Sharpe, Sortino, max drawdown, hit rate, avg trade net INR, turnover, trade count, block bootstrap 95% CI on daily net P&L, regression beta/alpha t-stat, cost sensitivity, and multiple-testing adjustments (Deflated Sharpe).
+   - Core edge condition requires that the net alpha CI excludes zero on TEST at 1x costs, survives 2x costs at a reduced level, and beats placebo baselines.
+2. **Placeholders where protocol is silent:**
+   - Specific numerical hurdle cutoffs (`min_sharpe: 1.0`, `max_drawdown_pct: 15.0`, `fatal_drawdown_pct: 25.0`, `min_hit_rate_pct: 50.0`, `max_cost_drag_pct: 35.0`, `fatal_cost_drag_pct: 100.0`, `min_stability_ratio: 0.60`, `min_trades: 30`, `annualization_factor: 250`, `risk_free_rate_pct: 6.5`) are unstated in the protocol.
+   - All such values are marked as `PLACEHOLDER` with `# TODO: agree with quant team; verify source`.
+   - The verdict explicitly reports `thresholds_provisional=True` while any threshold remains a placeholder.
+3. **Role Boundaries:**
+   - Risk-free rate, annualization factor, and quantitative hurdle numbers are quantitative modeling decisions, NOT Person 3 (dashboard/presentation) questions. Person 3 owns the dashboard and tear-sheet visualization.
+
+### 2. Stats Battery Specifications & Mathematical Definitions
 
 1. **Daily Return Series for Sharpe:**
    For each trading session $t \in \text{calendar}$ across the backtest period, daily portfolio return is defined strictly as:
@@ -326,72 +350,78 @@ evaluating strategy performance and robustness. It consumes the closed trade log
 7. **Statistical Significance & Multiple-Testing:**
    - **Stationary Bootstrap (Politis & Romano 1994):** Resamples daily returns with average block length of 5 sessions to preserve serial autocorrelation, generating empirical $p$-value for $H_0: \text{mean}(R) \le 0$ and 95% bootstrap confidence intervals for Sharpe.
    - **Deflated Sharpe Ratio (Bailey & López de Prado 2014):** Adjusts asymptotic Sharpe for selection bias / trial count ($N_{\text{trials}}$), skewness, and kurtosis.
-   - **Dynamic $N_{\text{trials}}$ (NOT a constant):** $N_{\text{trials}}$ must come dynamically from the run manifest or parameter search log (e.g. number of hyperparameter combinations tested in grid search, entry_z / stop_z variants, or signal sweeps). For a single walk-forward execution, $N_{\text{trials}} = 1$.
-   - **Seeding & Manifest Hash:** Bootstrap random number generation must be deterministically seeded from `backtest.seed` (ensuring bitwise reproducibility). Validation configuration must be hashed into `config_sha256` in `RunManifest` so parameter edits invalidate prior cached manifests.
+   - **Required Input $N_{\text{trials}}$:** $N_{\text{trials}}$ is a required input (`int | None`). If `n_trials is None`, Deflated Sharpe is reported as unavailable (`None`), with no implicit default of 1. If an integer $N \ge 1$ is supplied (from the run manifest or parameter search log), Deflated Sharpe is computed.
+   - **Seeding:** Bootstrap random number generation must be deterministically seeded from `backtest.seed` (same seed guarantees bitwise identical output).
+   - **Independent `validation_sha256`:** Validation configuration is hashed independently into `validation_sha256` and recorded in the verdict, separate from `RunManifest.config_sha256`.
 
-### 2. Explicit Verdict Logic (`pass` / `fail` / `inconclusive`)
+### 3. Explicit Verdict Logic (`pass` / `fail` / `inconclusive`)
 
-Driven strictly by config thresholds (`validation.hurdles`):
+Driven strictly by evidence availability and config thresholds:
 
-1. **`fail` (Any fatal condition triggers fail immediately):**
-   - Net Sharpe $< \text{fatal\_sharpe}$
-   - OR Max Drawdown $\% > \text{fatal\_drawdown\_pct}$
-   - OR Cost Drag $\% > \text{fatal\_cost\_drag\_pct}$ (or Gross P&L $\le 0$)
-   - OR Bootstrap $p$-value $\ge \text{fatal\_p\_value\_threshold}$
-   - OR Test fold Sharpe is negative across $> 50\%$ of walk-forward folds.
-2. **`pass` (ALL criteria must be satisfied simultaneously):**
-   - Net Sharpe $\ge \text{min\_sharpe}$
+1. **`inconclusive` (Insufficient Evidence):**
+   - Triggered when there is not enough empirical data or statistical power to prove or disprove edge, provided no fatal condition has occurred.
+   - Explicit conditions:
+     - `total_trades < min_trades` (sample size too small for statistical validity).
+     - OR bootstrap $p$-value falls in a marginal band: $p \in [p_{\text{threshold}}, p_{\text{fatal\_threshold}})$.
+2. **`fail` (Sufficient Evidence, but Hurdles Missed — OR Fatal Breach):**
+   - Triggered immediately if ANY fatal condition occurs (regardless of trade count):
+     - Net Sharpe $< \text{fatal\_sharpe}$
+     - OR Max Drawdown $\% > \text{fatal\_drawdown\_pct}$
+     - OR Cost Drag $\% > \text{fatal\_cost\_drag\_pct}$ (or Gross P&L $\le 0$)
+     - OR Bootstrap $p$-value $\ge \text{fatal\_p\_value\_threshold}$
+     - OR Test fold Sharpe is negative across $> 50\%$ of walk-forward folds.
+   - Triggered when evidence is sufficient (`total_trades >= min_trades` and $p < p_{\text{fatal\_threshold}}$), but one or more standard pass hurdles are failed:
+     - Net Sharpe $< \text{min\_sharpe}$
+     - OR Max Drawdown $\% > \text{max\_drawdown\_pct}$
+     - OR Trade Hit Rate $\% < \text{min\_hit\_rate\_pct}$
+     - OR Cost Drag $\% > \text{max\_cost\_drag\_pct}$
+     - OR Stability Ratio $< \text{min\_stability\_ratio}$.
+3. **`pass` (Sufficient Evidence AND All Hurdles Met Simultaneously):**
+   - `total_trades >= min_trades`
+   - AND no fatal conditions triggered
+   - AND Net Sharpe $\ge \text{min\_sharpe}$
    - AND Max Drawdown $\% \le \text{max\_drawdown\_pct}$
    - AND Trade Hit Rate $\% \ge \text{min\_hit\_rate\_pct}$
    - AND Cost Drag $\% \le \text{max\_cost\_drag\_pct}$
-   - AND Total Closed Trades $\ge \text{min\_trades}$
    - AND Stability Ratio $\ge \text{min\_stability\_ratio}$
-   - AND Bootstrap $p$-value $< \text{p\_value\_threshold}$
-3. **`inconclusive` (Safe but unproven):**
-   - Triggers when the strategy avoids all `fail` fatal traps, but fails to satisfy one or more `pass` hurdles.
-   - Primary scenarios:
-     - Profitable with positive Sharpe and acceptable drawdown, but insufficient sample size ($N_{\text{trades}} < \text{min\_trades}$).
-     - Marginal significance where bootstrap $p \in [\text{p\_value\_threshold}, \text{fatal\_p\_value\_threshold})$.
-     - Modest fold degradation where stability ratio $< \text{min\_stability\_ratio}$ but test folds remain net positive.
+   - AND Bootstrap $p$-value $< p_{\text{threshold}}$ (95% CI excludes zero).
 
-### 3. Proposed Configuration Keys
+### 4. Proposed Configuration Keys (`config/validation.yaml`)
 
 ```yaml
 validation:
-  annualization_factor: 250          # TODO: agree with Person 3; verify source (MCX sessions count, e.g. 250 vs 252)
-  risk_free_rate_pct: 6.5            # TODO: agree with Person 3; verify source (RBI 91-day T-bill or repo rate vs 0.0 cash)
-  subtract_risk_free: false          # TODO: agree with Person 3; verify convention (excess returns vs cash Sharpe)
-  min_trades: 30                     # TODO: agree with Person 3; verify sample size hurdle
+  annualization_factor: 250          # PLACEHOLDER (TODO: quant team; verify MCX sessions count, e.g. 250 vs 252)
+  risk_free_rate_pct: 6.5            # PLACEHOLDER (TODO: quant team; verify RBI repo/T-bill rate vs 0.0 cash)
+  subtract_risk_free: false          # PLACEHOLDER (TODO: quant team; verify convention: excess vs cash Sharpe)
+  min_trades: 30                     # PLACEHOLDER (TODO: quant team; verify minimum sample size hurdle)
   hurdles:
-    min_sharpe: 1.0                  # TODO: agree with Person 3; verify hurdle threshold
-    fatal_sharpe: 0.0                # TODO: agree with Person 3; verify fatal threshold
-    max_drawdown_pct: 15.0           # TODO: agree with Person 3; verify hurdle threshold
-    fatal_drawdown_pct: 25.0         # TODO: agree with Person 3; verify fatal threshold
-    min_hit_rate_pct: 50.0           # TODO: agree with Person 3; verify hurdle threshold
-    max_cost_drag_pct: 35.0          # TODO: agree with Person 3; verify hurdle threshold
-    fatal_cost_drag_pct: 100.0       # TODO: agree with Person 3; verify fatal threshold
-    min_stability_ratio: 0.60        # TODO: agree with Person 3; verify hurdle threshold
+    min_sharpe: 1.0                  # PLACEHOLDER (TODO: quant team; verify target hurdle threshold)
+    fatal_sharpe: 0.0                # PLACEHOLDER (TODO: quant team; verify fatal threshold)
+    max_drawdown_pct: 15.0           # PLACEHOLDER (TODO: quant team; verify target hurdle threshold)
+    fatal_drawdown_pct: 25.0         # PLACEHOLDER (TODO: quant team; verify fatal threshold)
+    min_hit_rate_pct: 50.0           # PLACEHOLDER (TODO: quant team; verify target hurdle threshold)
+    max_cost_drag_pct: 35.0          # PLACEHOLDER (TODO: quant team; verify target hurdle threshold)
+    fatal_cost_drag_pct: 100.0       # PLACEHOLDER (TODO: quant team; verify fatal threshold)
+    min_stability_ratio: 0.60        # PLACEHOLDER (TODO: quant team; verify target hurdle threshold)
   significance:
-    method: "stationary_bootstrap"   # or "deflated_sharpe"
-    bootstrap_samples: 2000          # TODO: agree with Person 3; verify sample size for compute vs precision
-    block_size_days: 5               # TODO: agree with Person 3; verify average block length for serial correlation
-    ci_level: 0.95                   # TODO: agree with Person 3; verify confidence level
-    p_value_threshold: 0.05          # TODO: agree with Person 3; verify significance alpha
-    fatal_p_value_threshold: 0.20    # TODO: agree with Person 3; verify fatal p-value cutoff
-    # NOTE: n_trials is NOT a constant in YAML; it is dynamically supplied from
-    # manifest.n_trials or search log (default 1 for single runs, N for sweeps).
+    method: "stationary_bootstrap"
+    bootstrap_samples: 2000          # PLACEHOLDER (TODO: quant team; verify compute vs precision)
+    block_size_days: 5               # PLACEHOLDER (TODO: quant team; verify average block length for autocorrelation)
+    ci_level: 0.95                   # PLACEHOLDER (TODO: quant team; verify confidence level)
+    p_value_threshold: 0.05          # PLACEHOLDER (TODO: quant team; verify significance alpha)
+    fatal_p_value_threshold: 0.20    # PLACEHOLDER (TODO: quant team; verify fatal p-value cutoff)
 ```
 
-### 4. Config Location: Comparison & Recommendation
+### 5. Config Location: Comparison & Recommendation
 
 - **Option 1: Extending `BacktestConfig` in `config/backtest.yaml` and `src/aurumspread/config.py`:**
   - *Pros:* Single backtest config file; unified deserialization via `load_backtest()`.
   - *Cons:* `config.py` is owned by Person 1. Modifying it requires cross-person code changes and approvals. Adding non-optional fields or complex nested models to `BacktestConfig` risks breaking existing minimal test fixtures due to Pydantic's `extra='forbid'`.
-- **Option 2: Dedicated `config/validation.yaml` with `ValidationConfig` in `src/aurumspread/backtest/` (or `config.py`):**
+- **Option 2: Dedicated `config/validation.yaml` with `ValidationConfig` in `src/aurumspread/backtest/`:**
   - *Pros:* Strict separation of concerns (simulation vs validation). Person 2 owns `src/aurumspread/backtest/` entirely and can evolve validation hurdles independently. Allows post-hoc validation on pre-computed `WalkForwardResult` logs without re-running simulation. Prevents coupling between trade execution engine and statistical evaluation criteria.
 - **Recommendation:** **Option 2 (Dedicated `config/validation.yaml` with `ValidationConfig` under `backtest/`)**. Cleanest ownership boundary, zero risk of breaking Person 1's `config.py` / `BacktestConfig`, and allows standalone execution of validation batteries.
 
-### 5. Proposed Function Signatures
+### 6. Proposed Function Signatures
 
 ```python
 @dataclass(frozen=True)
@@ -427,7 +457,7 @@ class PerformanceStats:
     bootstrap_ci_lower: float
     bootstrap_ci_upper: float
     deflated_sharpe_ratio: float | None
-    n_trials: int
+    n_trials: int | None
 
 
 VerdictStatus = Literal["pass", "fail", "inconclusive"]
@@ -436,6 +466,8 @@ VerdictStatus = Literal["pass", "fail", "inconclusive"]
 @dataclass(frozen=True)
 class StrategyVerdict:
     status: VerdictStatus
+    thresholds_provisional: bool
+    validation_sha256: str
     hurdle_results: dict[str, bool]
     reasons: list[str]
     stats: PerformanceStats
@@ -452,12 +484,12 @@ def compute_performance_stats(
     folds: list[WalkForwardResult] | None = None,
     significance_cfg: SignificanceConfig | None = None,
     seed: int | None = None,
-    n_trials: int = 1,
+    n_trials: int | None = None,
 ) -> PerformanceStats:
     """Compute complete performance metrics from trades and attribution.
 
     Bootstrap is seeded from `seed` (defaulting to backtest.seed).
-    `n_trials` is dynamically passed from manifest or parameter search log.
+    `n_trials` is a required input (None means deflated Sharpe reported unavailable).
     """
     ...
 
@@ -472,7 +504,7 @@ def evaluate_verdict(
 
 ## Open questions
 
-### Existing Open Questions (Person 1 / Person 2)
+### Cross-Role Open Questions (Person 1 / Person 2)
 
 1. Person 1 / Person 3: keep `datetime.date` in object columns, or does the
    dashboard need `datetime64[ns]` with no timezone? Signals will not convert.
@@ -497,29 +529,28 @@ def evaluate_verdict(
    explicit specification in all configs with no default), please confirm and
    Person 2 will remove the default.
 
-### Blocking Questions for Person 3 (Required to lock T11 implementation)
+### Quant Modeling & Protocol Decisions (Person 1 / Person 2 Internal)
 
 7. **Risk-free rate convention & source:** Should Sharpe subtract RBI repo rate (e.g. 6.5%)
    or use 0.0 (cash Sharpe for margin overlays)? If nonzero, where should the historical
    repo/T-bill rate series be sourced?
 8. **Annualization factor source:** Confirm MCX trading calendar annual session count
    (250 vs 252).
-9. **Minimum sample size:** Is 30 closed trades acceptable as the minimum sample size hurdle
-   before a run can achieve a conclusive verdict?
+9. **Minimum sample size hurdle:** Confirm 30 closed trades as minimum sample size hurdle
+   before a run can achieve a conclusive verdict.
 10. **Validation hurdle numbers:** Confirm target hurdle and fatal thresholds for Sharpe (1.0 / 0.0),
     drawdown (15% / 25%), and cost drag (35% / 100%).
-11. **Config file location:** Confirm recommendation of dedicated `config/validation.yaml`
-    with `ValidationConfig` model under `backtest/` vs extending Person 1's `BacktestConfig`.
 
 ### Presentation & Reporting Questions for Person 3 (Dashboard & Tear-Sheet)
 
-12. **Equity curve series formatting:** Should `PerformanceStats` attach full daily equity
+11. **Equity curve series formatting:** Should `PerformanceStats` attach full daily equity
     and drawdown time series objects (`pd.Series`) for tear-sheet plotting in Streamlit / HTML reports?
-13. **Verdict badge visual treatment:** How should the `pass` / `fail` / `inconclusive` verdict
+12. **Verdict badge visual treatment:** How should the `pass` / `fail` / `inconclusive` verdict
     be surfaced on the summary dashboard (e.g., color-coded status badge with expandable checklist
     of hurdle criteria vs an executive summary card)?
-14. **Per-fold stability visualization:** Does Person 3 need fold-by-fold tear-sheet panels
+13. **Per-fold stability visualization:** Does Person 3 need fold-by-fold tear-sheet panels
     comparing train vs test performance bars, or is an aggregate summary table of per-fold stats sufficient?
-15. **Bootstrap distribution chart:** Should the statistical check export empirical bootstrap
+14. **Bootstrap distribution chart:** Should the statistical check export empirical bootstrap
     distribution percentiles (e.g., 5th, 25th, 50th, 75th, 95th) so Person 3 can render a histogram /
     KDE plot showing return significance vs zero?
+
