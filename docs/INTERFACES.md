@@ -280,6 +280,161 @@ Person 2 proposes an `execution_inr` column for daily attribution.
    - Or fills in backtest are simulated at settlement marks and all slippage drag is
      retained solely in `cost_inr`, leaving `execution_inr` at 0.0.
 
+## Proposed: T11 Performance Battery and Strategy Verdict (OUTLINE ONLY)
+
+Task T11 defines the statistical validation battery and automated verdict logic
+evaluating strategy performance and robustness. It consumes the closed trade log
+(`trades`) and daily attribution series (`attribution`) produced by `walk_forward`.
+
+### 1. Stats Battery Specifications
+
+1. **Sharpe Ratio (Annualized):**
+   - Daily portfolio return: $R_t = \text{total\_pnl\_inr}_t / \text{capital\_inr}$.
+   - Annualized Sharpe: $\text{Sharpe} = \sqrt{250} \cdot \frac{\text{mean}(R_t - R_{f,t})}{\text{std}(R_t, \text{ddof}=1)}$,
+     where $R_{f,t} = \text{risk\_free\_rate\_pct} / 250$ (configurable, default RBI repo rate 6.5%).
+   - Also computed: Gross Sharpe (before fees & slippage) to isolate gross alpha volatility.
+2. **Hit Rate (Win Rate):**
+   - Trade level: fraction of closed trades with `net_pnl_inr > 0`.
+   - Day level: fraction of active book sessions with `total_pnl_inr > 0`.
+3. **Max Drawdown:**
+   - Daily cumulative equity: $\text{Equity}_t = \text{capital\_inr} + \sum_{s \le t} \text{total\_pnl\_inr}_s$.
+   - Peak-to-trough drawdown in INR: $\text{Peak}_t - \text{Equity}_t$.
+   - Peak-to-trough drawdown percentage: $(\text{Equity}_t - \text{Peak}_t) / \text{Peak}_t$.
+   - Maximum drawdown duration (longest underwater duration in trading sessions).
+4. **Turnover:**
+   - Annualized portfolio turnover rate:
+     $\text{Turnover} = \frac{250}{N_{\text{sessions}}} \cdot \frac{\sum_{\text{trades}} (\text{notional\_entry} + \text{notional\_exit})}{2 \cdot \text{capital\_inr}}$.
+5. **Cost Drag:**
+   - Fee drag relative to gross trading profits: $\sum |\text{cost\_inr}| / \sum \text{gross\_pnl\_inr}$.
+   - Annualized cost drag in basis points of portfolio capital:
+     $\frac{\sum |\text{cost\_inr}|}{\text{capital\_inr}} \cdot \frac{250}{N_{\text{sessions}}} \times 10{,}000$.
+6. **Per-Fold Stability:**
+   - Walk-forward train-to-test performance degradation:
+     $\text{Stability Ratio} = \text{Sharpe}_{\text{test}} / \text{Sharpe}_{\text{train}}$.
+   - Dispersion metrics: $\min_k \text{Sharpe}_{\text{test}, k}$ and $\max_k \text{MaxDD}_{\text{test}, k}$ across rolling folds.
+7. **Statistical Significance & Multiple-Testing:**
+   - Stationary Bootstrap (Politis & Romano 1994): Resamples daily returns with average block
+     length of 5 sessions to account for serial correlation, calculating empirical $p$-value
+     for $H_0: \text{mean}(R) \le 0$ and 95% bootstrap confidence intervals for Sharpe.
+   - Deflated Sharpe Ratio (Bailey & López de Prado 2014): Adjusts asymptotic Sharpe for
+     selection bias / parameter grid trials ($N_{\text{trials}}$), skewness, and kurtosis.
+
+### 2. Verdict Logic (`pass` / `fail` / `inconclusive`)
+
+Driven strictly by config thresholds (`validation.hurdles` in `config/backtest.yaml`):
+- **`pass`:**
+  - Net Sharpe $\ge \text{min\_sharpe}$ (default: 1.0)
+  - Max Drawdown $\% \le \text{max\_drawdown\_pct}$ (default: 15.0%)
+  - Hit Rate $\ge \text{min\_hit\_rate\_pct}$ (default: 50.0%)
+  - Cost Drag $\% \le \text{max\_cost\_drag\_pct}$ (default: 35.0%)
+  - Total Closed Trades $\ge \text{min\_trades}$ (default: 30)
+  - Stability Ratio $\ge \text{min\_stability\_ratio}$ (default: 0.60)
+  - Bootstrap $p$-value $< \text{p\_value\_threshold}$ (default: 0.05)
+- **`fail`:**
+  - Net Sharpe $< \text{fatal\_sharpe}$ (default: 0.0)
+  - Max Drawdown $\% > \text{fatal\_drawdown\_pct}$ (default: 25.0%)
+  - Cost Drag $\% > \text{fatal\_cost\_drag\_pct}$ (default: 100.0%)
+  - Bootstrap $p$-value $\ge \text{fatal\_p\_value\_threshold}$ (default: 0.20)
+- **`inconclusive`:**
+  - Strategy satisfies basic viability (no fatal triggers) but misses one or more
+    pass hurdles (e.g., $N_{\text{trades}} < 30$, or bootstrap $p \in [0.05, 0.20)$).
+
+### 3. Proposed Configuration Keys (`config/backtest.yaml`)
+
+```yaml
+validation:
+  annualization_factor: 250
+  risk_free_rate_pct: 6.5
+  min_trades: 30
+  hurdles:
+    min_sharpe: 1.0
+    fatal_sharpe: 0.0
+    max_drawdown_pct: 15.0
+    fatal_drawdown_pct: 25.0
+    min_hit_rate_pct: 50.0
+    max_cost_drag_pct: 35.0
+    fatal_cost_drag_pct: 100.0
+    min_stability_ratio: 0.60
+  significance:
+    method: "stationary_bootstrap"
+    bootstrap_samples: 2000
+    block_size_days: 5
+    ci_level: 0.95
+    p_value_threshold: 0.05
+    fatal_p_value_threshold: 0.20
+    n_trials: 1
+```
+
+### 4. Proposed Function Signatures
+
+```python
+@dataclass(frozen=True)
+class PerformanceStats:
+    # Return & Risk
+    annualized_return_pct: float
+    annualized_volatility_pct: float
+    sharpe_ratio: float
+    gross_sharpe_ratio: float
+    sortino_ratio: float
+    # Trade metrics
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    hit_rate_pct: float
+    profit_factor: float
+    avg_trade_pnl_inr: float
+    avg_hold_days: float
+    # Drawdown
+    max_drawdown_inr: float
+    max_drawdown_pct: float
+    max_drawdown_duration_days: int
+    # Turnover & Cost Drag
+    annualized_turnover: float
+    total_cost_inr: float
+    cost_drag_pct: float
+    cost_drag_bps: float
+    # Stability & Significance
+    stability_ratio: float | None
+    min_fold_sharpe: float | None
+    bootstrap_p_value: float
+    bootstrap_ci_lower: float
+    bootstrap_ci_upper: float
+    deflated_sharpe_ratio: float | None
+
+
+VerdictStatus = Literal["pass", "fail", "inconclusive"]
+
+
+@dataclass(frozen=True)
+class StrategyVerdict:
+    status: VerdictStatus
+    hurdle_results: dict[str, bool]
+    reasons: list[str]
+    stats: PerformanceStats
+
+
+def compute_performance_stats(
+    trades: pd.DataFrame,
+    attribution: pd.DataFrame,
+    capital_inr: float,
+    *,
+    annualization_factor: int = 250,
+    risk_free_rate_pct: float = 6.5,
+    folds: list[WalkForwardResult] | None = None,
+    significance_cfg: SignificanceConfig | None = None,
+) -> PerformanceStats:
+    """Compute complete performance metrics from trades and attribution."""
+    ...
+
+
+def evaluate_verdict(
+    stats: PerformanceStats,
+    validation_cfg: ValidationConfig,
+) -> StrategyVerdict:
+    """Evaluate config-driven pass / fail / inconclusive verdict against validation hurdles."""
+    ...
+```
+
 ## Open questions
 
 1. Person 1 / Person 3: keep `datetime.date` in object columns, or does the
@@ -304,3 +459,17 @@ Person 2 proposes an `execution_inr` column for daily attribution.
    prefers strict schema uniformity across all backtest fields (i.e. requiring
    explicit specification in all configs with no default), please confirm and
    Person 2 will remove the default.
+7. Person 3 (OPEN): Equity curve and drawdown series formatting: Should
+   `evaluate_verdict` / `compute_performance_stats` return full daily equity and
+   drawdown time series objects attached to `PerformanceStats` or `WalkForwardResult`
+   for tear-sheet plotting in Streamlit / HTML reports?
+8. Person 3 (OPEN): Tear-sheet visual layout & verdict badge: How should the
+   `pass` / `fail` / `inconclusive` verdict be surfaced on the summary dashboard
+   (e.g., color-coded status badge with expandable checklist of hurdle criteria
+   vs separate executive summary card)?
+9. Person 3 (OPEN): Per-fold stability visualization: Does Person 3 need fold-by-fold
+   tear-sheet panels comparing train vs test metrics, or is an aggregate summary table
+   of per-fold statistics sufficient?
+10. Person 3 (OPEN): Bootstrap distribution chart: Should the statistical check
+    export empirical bootstrap distribution percentiles (e.g., 5th, 25th, 50th, 75th, 95th)
+    so Person 3 can render a histogram / KDE plot showing the strategy's significance?
