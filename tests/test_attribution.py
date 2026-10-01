@@ -761,3 +761,90 @@ def test_missing_mark_mid_hold_produces_reversing_residual() -> None:
     # Total P&L across all days equals total alpha: -100 * (11.5 - 10.0) = -150.0 INR
     assert attr["total_pnl_inr"].sum() == pytest.approx(-150.0)
     assert attr["alpha_inr"].sum() == pytest.approx(-150.0)
+
+
+def test_walk_forward_with_contract_level_mark_prices() -> None:
+    """walk_forward accepts Person 1's contract-level normalized mark_prices frame.
+
+    Checks per-day residual against marks.
+    Person 1 normalized frame grain: (trade_date, symbol, expiry_date)
+    with column pure_price_inr_per_g (or close_inr).
+    pure_price_inr_per_g is the exact same quantity as price_a_inr_per_g /
+    price_b_inr_per_g in the signal frame (unadjusted INR/g pure price).
+    """
+    backtest, costs, contracts = _configs()
+    frame = _frame()
+
+    # Build contract-level normalized mark prices for all sessions
+    # GOLDM: 10.0 on Jan 1-4, 10.20 on Jan 5 (divergence vs signal 10.00), 12.00 on Jan 6
+    mark_rows = []
+    for d in DAYS:
+        p_a = 12.0 if d == DAYS[5] else (10.2 if d == DAYS[4] else 10.0)
+        mark_rows.append(
+            {
+                "trade_date": d,
+                "symbol": "GOLDM",
+                "expiry_date": EXPIRY_A,
+                "pure_price_inr_per_g": p_a,
+            }
+        )
+        mark_rows.append(
+            {
+                "trade_date": d,
+                "symbol": "GOLDTEN",
+                "expiry_date": EXPIRY_B,
+                "pure_price_inr_per_g": 10.0,
+            }
+        )
+    norm_marks = pd.DataFrame(mark_rows)
+
+    # 1. Run walk_forward passing normalized mark_prices with pure_price_inr_per_g
+    result = walk_forward(
+        frame,
+        backtest=backtest,
+        costs=costs,
+        contracts=contracts,
+        target_g=100.0,
+        mark_prices=norm_marks,
+    )
+
+    attr = result.attribution
+    assert len(attr) == 3
+    assert verify_attribution_identity(attr)
+
+    by_date = attr.set_index("trade_date")
+    # Day 4 (entry): mark 10.0 == fill 10.0 -> residual is 0.0
+    assert by_date.loc[DAYS[3], "residual_inr"] == pytest.approx(0.0)
+    assert by_date.loc[DAYS[3], "cost_inr"] == pytest.approx(-127.5)
+
+    # Day 5 (mid-hold mark divergence): mark is 10.20 (+0.20 INR/g on short 100g -> -20 INR MTM)
+    # Signal alpha is 0.0 (signal price 10.00 == prev signal 10.00).
+    # Tracking difference residual_inr is exactly -20.0 INR.
+    assert by_date.loc[DAYS[4], "residual_inr"] == pytest.approx(-20.0)
+    assert by_date.loc[DAYS[4], "alpha_inr"] == pytest.approx(0.0)
+    assert by_date.loc[DAYS[4], "total_pnl_inr"] == pytest.approx(-20.0)
+
+    # Day 6 (exit fill session): fill is 12.00. Mark moves 10.20 -> 12.00 (-180 INR MTM).
+    # Signal alpha is -200.0 INR. Residual reverses to +20.0 INR.
+    assert by_date.loc[DAYS[5], "residual_inr"] == pytest.approx(20.0)
+    assert by_date.loc[DAYS[5], "alpha_inr"] == pytest.approx(-200.0)
+    assert by_date.loc[DAYS[5], "total_pnl_inr"] == pytest.approx(-319.9)
+
+    # Cumulative residual across the holding period is exactly 0.0
+    assert attr["residual_inr"].sum() == pytest.approx(0.0)
+
+    # Total P&L across all days equals total trade net P&L (-467.4 INR)
+    trade = result.trades.iloc[0]
+    assert attr["total_pnl_inr"].sum() == pytest.approx(trade["net_pnl_inr"])
+
+    # 2. Also confirm close_inr is accepted as an alternative column name
+    norm_marks_close = norm_marks.rename(columns={"pure_price_inr_per_g": "close_inr"})
+    result_close = walk_forward(
+        frame,
+        backtest=backtest,
+        costs=costs,
+        contracts=contracts,
+        target_g=100.0,
+        mark_prices=norm_marks_close,
+    )
+    pd.testing.assert_frame_equal(result.attribution, result_close.attribution)

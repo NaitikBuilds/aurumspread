@@ -186,8 +186,10 @@ no internal config file I/O).
 
 What `residual_inr` DOES test:
 - Independent MTM vs model decomposition tracking: verifies whether actual
-  settlement marks (from Person 1's normalized price frame `(trade_date, symbol, expiry_date)`)
-  and execution fills match the signal price series.
+  settlement marks (from Person 1's normalized contract-level price frame `(trade_date, symbol, expiry_date)`
+  expecting `pure_price_inr_per_g` or `close_inr`) and execution fills match the signal price series.
+  `pure_price_inr_per_g` is the exact same quantity as the signal frame's `price_a_inr_per_g` / `price_b_inr_per_g`
+  (unadjusted INR/g pure price).
 - Mark timing and missing marks: mid-hold missing marks produce non-zero per-day
   residuals that reverse once marks resume (cumulative residual across the hold sums to zero).
 - Execution vs mark mismatches: intraday fill differences relative to closing marks.
