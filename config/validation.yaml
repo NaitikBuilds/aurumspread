@@ -1,0 +1,27 @@
+# AurumSpread Strategy Validation & Performance Battery Configuration
+# NOTE: Numerical hurdle thresholds are uncalibrated and subject to protocol sign-off.
+# All thresholds are marked PLACEHOLDER with TODO comments.
+# The verdict carries thresholds_provisional=True while any placeholder remains.
+
+validation:
+  annualization_factor: 250          # PLACEHOLDER (TODO: quant team; verify MCX sessions count, e.g. 250 vs 252)
+  risk_free_rate_pct: 6.5            # PLACEHOLDER (TODO: quant team; verify RBI repo/T-bill rate vs 0.0 cash)
+  subtract_risk_free: false          # PLACEHOLDER (TODO: quant team; verify convention: excess vs cash Sharpe)
+  min_trades: 30                     # PLACEHOLDER (TODO: quant team; verify minimum sample size hurdle)
+  thresholds_provisional: true       # PLACEHOLDER (TODO: set to false once hurdles are signed off)
+  hurdles:
+    min_sharpe: 1.0                  # PLACEHOLDER (TODO: quant team; verify target hurdle threshold)
+    fatal_sharpe: 0.0                # PLACEHOLDER (TODO: quant team; verify fatal threshold)
+    max_drawdown_pct: 15.0           # PLACEHOLDER (TODO: quant team; verify target hurdle threshold)
+    fatal_drawdown_pct: 25.0         # PLACEHOLDER (TODO: quant team; verify fatal threshold)
+    min_hit_rate_pct: 50.0           # PLACEHOLDER (TODO: quant team; verify target hurdle threshold)
+    max_cost_drag_pct: 35.0          # PLACEHOLDER (TODO: quant team; verify target hurdle threshold)
+    fatal_cost_drag_pct: 100.0       # PLACEHOLDER (TODO: quant team; verify fatal threshold)
+    min_stability_ratio: 0.60        # PLACEHOLDER (TODO: quant team; verify target hurdle threshold)
+  significance:
+    method: "stationary_bootstrap"
+    bootstrap_samples: 2000          # PLACEHOLDER (TODO: quant team; verify compute vs precision)
+    block_size_days: 5               # PLACEHOLDER (TODO: quant team; verify average block length for autocorrelation)
+    ci_level: 0.95                   # PLACEHOLDER (TODO: quant team; verify confidence level)
+    p_value_threshold: 0.05          # PLACEHOLDER (TODO: quant team; verify significance alpha)
+    fatal_p_value_threshold: 0.20    # PLACEHOLDER (TODO: quant team; verify fatal p-value cutoff)

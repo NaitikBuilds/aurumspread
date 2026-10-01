@@ -16,8 +16,13 @@ alignment:                            # PRD 6.2 expiry alignment + carry adjustm
   max_dte_gap_days: 45                # pairs farther apart in DTE than this are not formed
   constant_maturity_grid_days: [30, 60, 90]   # analytics only; trading uses real contracts
 liquidity:
-  min_volume_lots: null      # calibrate on train period only
+  # TODO(verify): docs/DATA_CONTRACT.md still asks whether Volume and OpenInterest
+  # are lots or units. These floors compare against the raw columns with no
+  # conversion. Null means the floor is off, not zero. Calibrate on TRAIN only
+  # after the unit is confirmed from the MCX bhavcopy specification.
+  min_volume_lots: null
   min_open_interest_lots: null
   max_participation_pct_of_volume: 5
 capital_inr: 1000000
 fill_rule: next_day_settlement
+residual_tolerance_inr: 0.01  # flag sessions where |residual_inr| exceeds tolerance (e.g. data gaps or rounding)

@@ -293,6 +293,11 @@ class BacktestConfig(_FrozenModel):
     liquidity: LiquidityConfig
     capital_inr: float = Field(gt=0)
     fill_rule: Literal["next_day_settlement"]
+    residual_tolerance_inr: float = Field(
+        default=0.01,
+        ge=0,
+        description="Tolerance in INR for daily attribution residual anomaly flag.",
+    )
 
     @model_validator(mode="after")
     def _check_thresholds(self) -> BacktestConfig:

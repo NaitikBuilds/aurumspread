@@ -1,5 +1,11 @@
-# ALL VALUES ARE PLACEHOLDERS TO BE VERIFIED (broker contract note + MCX/SEBI circulars).
-# Report results at base, 2x and 0.5x. Do not present placeholders as facts.
+# ALL VALUES ARE PLACEHOLDERS TO BE VERIFIED. Null means missing, not zero.
+# backtest.costs refuses to emit an INR total while any of these is null.
+# Still to verify, from the primary source, not from memory:
+#   brokerage, GST: broker contract note
+#   exchange txn charge, CTT: MCX circular / MCX charge schedule
+#   SEBI fee: SEBI turnover-fee circular
+#   stamp duty: the applicable state stamp schedule for commodity futures
+# Report results at the stress_multipliers below. Do not present placeholders as facts.
 brokerage_inr_per_order: null       # verify
 exchange_txn_charge_pct: null       # verify (MCX schedule)
 ctt_pct_on_sell: null               # verify (commodity transaction tax, non-agri futures)
