@@ -177,9 +177,26 @@ standalone by `backtest.compute_daily_attribution`.
 mark-to-market (entry and exit execution fills and daily settlement marks minus
 fees paid, or `daily_mtm` if provided), not from the sum of the attribution
 columns. `residual_inr` measures the tracking difference
-`total_pnl_inr - (beta_inr + alpha_inr + cost_inr)` (non-zero when mark prices,
-fill rounding, or data gaps diverge from the signal model). Flagged by
+`total_pnl_inr - (beta_inr + alpha_inr + cost_inr)`. Flagged by
 `backtest.flag_residual_outliers` against `residual_tolerance_inr` in `backtest.yaml`.
+
+### What residual_inr does and does not test
+
+What `residual_inr` DOES test:
+- Independent MTM vs model decomposition tracking: verifies whether actual
+  settlement marks (from Person 1's normalized price frame `(trade_date, symbol, expiry_date)`)
+  and execution fills match the signal price series.
+- Mark timing and missing marks: mid-hold missing marks produce non-zero per-day
+  residuals that reverse once marks resume (cumulative residual across the hold sums to zero).
+- Execution vs mark mismatches: intraday fill differences relative to closing marks.
+- Accounting consistency: confirms fees and leg exposures balance algebraically.
+
+What `residual_inr` DOES NOT test:
+- Economic profitability or trading alpha quality (tested by net P&L and Sharpe).
+- Statistical significance or overfitting (tested by the validation battery).
+- When `mark_prices` is not provided separately from `signals`, holding-day MTM
+  falls back to the signal series, so holding-day residual is zero by construction
+  and does not test for external mark divergence.
 
 `cost_inr` is signed (`<= 0.0`), representing the drag of fees and slippage
 incurred on that session.

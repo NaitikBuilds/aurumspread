@@ -132,6 +132,7 @@ def walk_forward(
     allow_test: bool = False,
     calendar: TradingCalendar | None = None,
     d_ref: float | pd.Series | Mapping[date, float] | Callable[[date], float] | str | None = None,
+    mark_prices: pd.DataFrame | None = None,
 ) -> WalkForwardResult:
     """Run the day loop on a signal frame that already contains z-scores.
 
@@ -252,6 +253,7 @@ def walk_forward(
         costs=costs,
         contracts=contracts,
         multiplier=multiplier,
+        mark_prices=mark_prices,
     )
     return WalkForwardResult(
         trades=trades_df,

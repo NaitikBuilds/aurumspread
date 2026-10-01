@@ -10,6 +10,22 @@ Decomposes daily strategy performance into:
 
 Mathematical identity:
     total_pnl_inr = beta_inr + alpha_inr + cost_inr + residual_inr
+
+What residual_inr DOES test:
+- Independent MTM vs model decomposition tracking: verifies whether actual
+  settlement marks (from Person 1's normalized price frame) and execution fills
+  match the signal price series.
+- Mark timing and missing marks: mid-hold missing marks produce non-zero per-day
+  residuals that reverse once marks resume (cumulative residual sums to zero).
+- Execution vs mark mismatches: fill differences on entry and exit sessions.
+- Accounting consistency: confirms fees and leg exposures balance algebraically.
+
+What residual_inr DOES NOT test:
+- Economic profitability or trading alpha quality (tested by net P&L and Sharpe).
+- Statistical significance or overfitting (tested by the validation battery).
+- When mark_prices is not provided separately from signals, holding-day MTM
+  falls back to the signal series, so holding-day residual is zero by construction
+  and does not test for external mark divergence.
 """
 
 from __future__ import annotations
@@ -129,23 +145,45 @@ def compute_daily_attribution(
         for _, row in frame.iterrows()
     }
 
-    marks_by_key: dict[tuple, pd.Series] = {}
-    if mark_prices is not None:
+    marks_lookup: dict[tuple[date, str, date], float] = {}
+    pair_marks_lookup: dict[tuple, pd.Series] = {}
+    has_custom_marks = False
+    if mark_prices is not None and not mark_prices.empty:
+        has_custom_marks = True
         mp = mark_prices.copy()
         mp["trade_date"] = mp["trade_date"].map(_as_date)
-        for col in ("expiry_a", "expiry_b"):
-            if col in mp.columns:
-                mp[col] = mp[col].map(_as_date)
-        marks_by_key = {
-            (
-                _as_date(r["trade_date"]),
-                r["symbol_a"],
-                _as_date(r["expiry_a"]),
-                r["symbol_b"],
-                _as_date(r["expiry_b"]),
-            ): r
-            for _, r in mp.iterrows()
-        }
+        if "symbol" in mp.columns and "expiry_date" in mp.columns:
+            # Person 1's contract-level normalized price frame
+            mp["expiry_date"] = mp["expiry_date"].map(_as_date)
+            p_col = (
+                "pure_price_inr_per_g"
+                if "pure_price_inr_per_g" in mp.columns
+                else ("close_inr" if "close_inr" in mp.columns else None)
+            )
+            if p_col:
+                for _, r in mp.iterrows():
+                    val = r[p_col]
+                    if pd.notna(val):
+                        key = (
+                            _as_date(r["trade_date"]),
+                            str(r["symbol"]),
+                            _as_date(r["expiry_date"]),
+                        )
+                        marks_lookup[key] = float(val)
+        elif "symbol_a" in mp.columns and "expiry_a" in mp.columns:
+            # Pair-level marks frame
+            for col in ("expiry_a", "expiry_b"):
+                if col in mp.columns:
+                    mp[col] = mp[col].map(_as_date)
+            for _, r in mp.iterrows():
+                key_pair = (
+                    _as_date(r["trade_date"]),
+                    r["symbol_a"],
+                    _as_date(r["expiry_a"]),
+                    r["symbol_b"],
+                    _as_date(r["expiry_b"]),
+                )
+                pair_marks_lookup[key_pair] = r
 
     daily_beta: dict[date, float] = defaultdict(float)
     daily_alpha: dict[date, float] = defaultdict(float)
@@ -207,7 +245,34 @@ def compute_daily_attribution(
         for idx, day in enumerate(sessions):
             active_dates.add(day)
             sig_row = signals_by_key.get((day, *pair))
-            mark_row = marks_by_key.get((day, *pair)) if marks_by_key else sig_row
+            if has_custom_marks:
+                if marks_lookup:
+                    mark_a = marks_lookup.get((day, pair[0], pair[1]))
+                    mark_b = marks_lookup.get((day, pair[2], pair[3]))
+                else:
+                    p_row = pair_marks_lookup.get((day, *pair))
+                    mark_a = (
+                        float(p_row["price_a_inr_per_g"])
+                        if (p_row is not None and pd.notna(p_row.get("price_a_inr_per_g")))
+                        else None
+                    )
+                    mark_b = (
+                        float(p_row["price_b_inr_per_g"])
+                        if (p_row is not None and pd.notna(p_row.get("price_b_inr_per_g")))
+                        else None
+                    )
+            else:
+                # Fallback to signal prices: holding-day residual is 0 by construction
+                mark_a = (
+                    float(sig_row["price_a_inr_per_g"])
+                    if (sig_row is not None and pd.notna(sig_row.get("price_a_inr_per_g")))
+                    else None
+                )
+                mark_b = (
+                    float(sig_row["price_b_inr_per_g"])
+                    if (sig_row is not None and pd.notna(sig_row.get("price_b_inr_per_g")))
+                    else None
+                )
 
             # 1. Independent Mark-to-Market P&L from execution fills and settlement marks
             if idx == 0 and n_sessions == 1:
@@ -216,13 +281,9 @@ def compute_daily_attribution(
                 day_fees = entry_fee + exit_fee
             elif idx == 0:
                 mtm_start_a = entry_fill_a
-                mtm_end_a = (
-                    float(mark_row["price_a_inr_per_g"]) if mark_row is not None else entry_fill_a
-                )
+                mtm_end_a = mark_a if mark_a is not None else entry_fill_a
                 mtm_start_b = entry_fill_b
-                mtm_end_b = (
-                    float(mark_row["price_b_inr_per_g"]) if mark_row is not None else entry_fill_b
-                )
+                mtm_end_b = mark_b if mark_b is not None else entry_fill_b
                 day_fees = entry_fee
                 mtm_prev_close_a = mtm_end_a
                 mtm_prev_close_b = mtm_end_b
@@ -234,17 +295,9 @@ def compute_daily_attribution(
                 day_fees = exit_fee
             else:
                 mtm_start_a = mtm_prev_close_a
-                mtm_end_a = (
-                    float(mark_row["price_a_inr_per_g"])
-                    if mark_row is not None
-                    else mtm_prev_close_a
-                )
+                mtm_end_a = mark_a if mark_a is not None else mtm_prev_close_a
                 mtm_start_b = mtm_prev_close_b
-                mtm_end_b = (
-                    float(mark_row["price_b_inr_per_g"])
-                    if mark_row is not None
-                    else mtm_prev_close_b
-                )
+                mtm_end_b = mark_b if mark_b is not None else mtm_prev_close_b
                 day_fees = 0.0
                 mtm_prev_close_a = mtm_end_a
                 mtm_prev_close_b = mtm_end_b

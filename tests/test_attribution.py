@@ -616,3 +616,97 @@ def test_flag_residual_outliers_and_backtest_yaml_tolerance() -> None:
     # With wide tolerance 1.0: |0.50| <= 1.0, no days are flagged
     not_flagged = flag_residual_outliers(attr, tolerance=1.0)
     assert not_flagged.empty
+
+
+def test_missing_mark_mid_hold_produces_reversing_residual() -> None:
+    """Missing mark mid-hold produces non-zero residual that reverses next day; cumulative is 0."""
+    trade = pd.DataFrame(
+        [
+            {
+                "trade_id": 1,
+                "symbol_a": "GOLDM",
+                "expiry_a": EXPIRY_A,
+                "symbol_b": "GOLDTEN",
+                "expiry_b": EXPIRY_B,
+                "entry_fill_date": date(2026, 1, 1),
+                "exit_fill_date": date(2026, 1, 5),
+                "qty_g_a": -100.0,
+                "qty_g_b": 100.0,
+                "residual_g": 0.0,
+                "side": "short_spread",
+                "entry_fill_a_inr_per_g": 10.0,
+                "entry_fill_b_inr_per_g": 10.0,
+                "exit_fill_a_inr_per_g": 11.5,
+                "exit_fill_b_inr_per_g": 10.0,
+                "cost_inr": 0.0,
+                "exit_reason": "exit_z",
+            }
+        ]
+    )
+
+    days = [date(2026, 1, day) for day in range(1, 6)]
+    prices_a = [10.0, 10.5, 11.0, 11.2, 11.5]
+    sig_rows = [
+        {
+            "trade_date": d,
+            "symbol_a": "GOLDM",
+            "expiry_a": EXPIRY_A,
+            "symbol_b": "GOLDTEN",
+            "expiry_b": EXPIRY_B,
+            "price_a_inr_per_g": p,
+            "price_b_inr_per_g": 10.0,
+        }
+        for d, p in zip(days, prices_a, strict=True)
+    ]
+    signals = pd.DataFrame(sig_rows)
+
+    # Person 1 normalized price frame (pure_price_inr_per_g) with GOLDM mark missing on Jan 3
+    norm_rows = []
+    for d, p in zip(days, prices_a, strict=True):
+        if d != date(2026, 1, 3):
+            norm_rows.append(
+                {
+                    "trade_date": d,
+                    "symbol": "GOLDM",
+                    "expiry_date": EXPIRY_A,
+                    "pure_price_inr_per_g": p,
+                }
+            )
+        norm_rows.append(
+            {
+                "trade_date": d,
+                "symbol": "GOLDTEN",
+                "expiry_date": EXPIRY_B,
+                "pure_price_inr_per_g": 10.0,
+            }
+        )
+    norm_marks = pd.DataFrame(norm_rows)
+
+    attr = compute_daily_attribution(trade, signals, mark_prices=norm_marks, d_ref=0.0)
+    assert len(attr) == 5
+    assert verify_attribution_identity(attr)
+
+    by_date = attr.set_index("trade_date")
+    # Day 1 (entry): mark 10.0 == fill 10.0 -> residual is 0.0
+    assert by_date.loc[date(2026, 1, 1), "residual_inr"] == pytest.approx(0.0)
+    # Day 2 (hold): mark 10.5 == signal 10.5 -> residual is 0.0
+    assert by_date.loc[date(2026, 1, 2), "residual_inr"] == pytest.approx(0.0)
+
+    # Day 3 (missing mark): MTM gross is 0.0, signal alpha is -50.0 -> residual is +50.0
+    assert by_date.loc[date(2026, 1, 3), "residual_inr"] == pytest.approx(50.0)
+    assert by_date.loc[date(2026, 1, 3), "alpha_inr"] == pytest.approx(-50.0)
+    assert by_date.loc[date(2026, 1, 3), "total_pnl_inr"] == pytest.approx(0.0)
+
+    # Day 4 (mark resumes): MTM gross is -70.0, signal alpha is -20.0 -> residual reverses to -50.0
+    assert by_date.loc[date(2026, 1, 4), "residual_inr"] == pytest.approx(-50.0)
+    assert by_date.loc[date(2026, 1, 4), "alpha_inr"] == pytest.approx(-20.0)
+    assert by_date.loc[date(2026, 1, 4), "total_pnl_inr"] == pytest.approx(-70.0)
+
+    # Day 5 (exit): mark/fill 11.5 -> residual is 0.0
+    assert by_date.loc[date(2026, 1, 5), "residual_inr"] == pytest.approx(0.0)
+
+    # Cumulative residual across the entire hold is exactly 0.0
+    assert attr["residual_inr"].sum() == pytest.approx(0.0)
+    # Total P&L across all days equals total alpha: -100 * (11.5 - 10.0) = -150.0 INR
+    assert attr["total_pnl_inr"].sum() == pytest.approx(-150.0)
+    assert attr["alpha_inr"].sum() == pytest.approx(-150.0)
