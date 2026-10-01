@@ -266,8 +266,14 @@ def compute_daily_attribution(
                 else None
             )
 
-            if idx == 0:
-                # Model signal change on entry session
+            if idx == 0 and n_sessions == 1:
+                # Same-session trade: price change between entry fill and exit fill
+                dp_sig_a = exit_fill_a - entry_fill_a
+                dp_sig_b = exit_fill_b - entry_fill_b
+                sig_prev_close_a = curr_sig_a
+                sig_prev_close_b = curr_sig_b
+            elif idx == 0:
+                # Model signal change on entry session of multi-day hold
                 dp_sig_a = 0.0
                 dp_sig_b = 0.0
                 sig_prev_close_a = curr_sig_a
@@ -292,12 +298,12 @@ def compute_daily_attribution(
             beta_day = res_g * ref_move
             alpha_day = qty_a * (dp_sig_a - ref_move) + qty_b * (dp_sig_b - ref_move)
 
-            # Implied carry accrual (subset of alpha)
+            # Implied carry accrual (subset of alpha; strictly 0.0 on entry session)
             carry_day = 0.0
-            if sig_row is not None and "carry_b_inr_per_g_per_day" in sig_row:
+            if idx > 0 and sig_row is not None and "carry_b_inr_per_g_per_day" in sig_row:
                 carry_rate = sig_row["carry_b_inr_per_g_per_day"]
                 if pd.notna(carry_rate) and math.isfinite(float(carry_rate)):
-                    prev_day = sessions[idx - 1] if idx > 0 else day
+                    prev_day = sessions[idx - 1]
                     cal_days = max(1, (day - prev_day).days)
                     carry_day = qty_b * float(carry_rate) * cal_days
 

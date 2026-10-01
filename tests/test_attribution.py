@@ -287,7 +287,9 @@ def test_carry_inr_reported_as_subset_of_alpha() -> None:
     result = _run(frame)
     attr = result.attribution.set_index("trade_date")
 
-    # Long leg B (+100g) earns carry_rate * 100g * calendar_days
+    # Entry session is DAYS[3] (2026-01-04): carry must be strictly 0.0
+    assert attr.loc[DAYS[3], "carry_inr"] == pytest.approx(0.0)
+    # Long leg B (+100g) earns carry_rate * 100g * calendar_days on holding sessions
     # Day 5 (1 day after Jan 4): 100 * 0.05 * 1 = 5.0 INR
     assert attr.loc[DAYS[4], "carry_inr"] == pytest.approx(5.0)
     # Day 6 (1 day after Jan 5): 100 * 0.05 * 1 = 5.0 INR
@@ -295,6 +297,21 @@ def test_carry_inr_reported_as_subset_of_alpha() -> None:
 
     # Carry is a subset of alpha and not added again to total_pnl_inr:
     assert verify_attribution_identity(result.attribution)
+
+
+def test_entry_session_carry_is_strictly_zero() -> None:
+    """Entry-session carry_inr must be 0.0: carry is a subset of alpha, and alpha is 0 on entry."""
+    carry_rate = 0.08  # INR/g/day
+    frame = _frame(carry_b=carry_rate)
+    result = _run(frame)
+    attr = result.attribution.set_index("trade_date")
+
+    # Entry session is DAYS[3] (2026-01-04)
+    assert attr.loc[DAYS[3], "carry_inr"] == 0.0
+    assert attr.loc[DAYS[3], "alpha_inr"] == pytest.approx(0.0)
+    # Subsequent holding sessions accrue carry
+    assert attr.loc[DAYS[4], "carry_inr"] == pytest.approx(8.0)
+    assert attr.loc[DAYS[5], "carry_inr"] == pytest.approx(8.0)
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +383,78 @@ def test_same_day_entry_and_exit_attribution() -> None:
     attr = result.attribution
     assert verify_attribution_identity(attr)
     assert attr["total_pnl_inr"].sum() == pytest.approx(result.trades["net_pnl_inr"].sum())
+
+
+def test_same_session_trade_carries_gross_pnl_in_alpha_beta_not_residual() -> None:
+    """Same-session trade (gross -100 INR): beta+alpha carry gross, residual is ~0."""
+    entry_fill_date = date(2026, 1, 7)
+    trade = pd.DataFrame(
+        [
+            {
+                "trade_id": 1,
+                "symbol_a": "GOLDM",
+                "expiry_a": EXPIRY_A,
+                "symbol_b": "GOLDTEN",
+                "expiry_b": date(2026, 1, 12),
+                "entry_fill_date": entry_fill_date,
+                "exit_fill_date": entry_fill_date,
+                "qty_g_a": -100.0,
+                "qty_g_b": 100.0,
+                "residual_g": 0.0,
+                "side": "short_spread",
+                "entry_fill_a_inr_per_g": 10.0,
+                "entry_fill_b_inr_per_g": 10.0,
+                "exit_fill_a_inr_per_g": 11.0,
+                "exit_fill_b_inr_per_g": 10.0,
+                "cost_inr": 20.0,
+                "exit_reason": "exit_buffer",
+            }
+        ]
+    )
+    signals = pd.DataFrame(
+        [
+            {
+                "trade_date": entry_fill_date,
+                "symbol_a": "GOLDM",
+                "expiry_a": EXPIRY_A,
+                "symbol_b": "GOLDTEN",
+                "expiry_b": date(2026, 1, 12),
+                "price_a_inr_per_g": 11.0,
+                "price_b_inr_per_g": 10.0,
+                "carry_b_inr_per_g_per_day": 0.05,
+            }
+        ]
+    )
+
+    # 1. d_ref = 0.0 (default): gross P&L (-100 INR) carried in alpha, beta = 0, residual = 0
+    attr = compute_daily_attribution(trade, signals, d_ref=0.0)
+    assert len(attr) == 1
+    row = attr.iloc[0]
+    assert row["trade_date"] == entry_fill_date
+    assert row["beta_inr"] == 0.0
+    assert row["alpha_inr"] == pytest.approx(-100.0)
+    assert row["carry_inr"] == 0.0  # Entry session carry must be strictly 0.0
+    assert row["cost_inr"] == pytest.approx(-20.0)
+    assert row["residual_inr"] == 0.0
+    assert row["total_pnl_inr"] == pytest.approx(-120.0)
+    assert verify_attribution_identity(attr)
+
+    # 2. d_ref = 2.5 with unhedged grams: beta + alpha carry gross -100 INR, residual = 0
+    trade_unhedged = trade.copy()
+    trade_unhedged["qty_g_b"] = 90.0
+    trade_unhedged["residual_g"] = -10.0
+    # gross = -100 * (11 - 10) + 90 * (10 - 10) = -100.0 INR
+    attr_unhedged = compute_daily_attribution(trade_unhedged, signals, d_ref=2.5)
+    row_u = attr_unhedged.iloc[0]
+    # beta = -10.0 * 2.5 = -25.0 INR
+    # alpha = -100 * (1.0 - 2.5) + 90 * (0.0 - 2.5) = 150 - 225 = -75.0 INR
+    assert row_u["beta_inr"] == pytest.approx(-25.0)
+    assert row_u["alpha_inr"] == pytest.approx(-75.0)
+    assert row_u["beta_inr"] + row_u["alpha_inr"] == pytest.approx(-100.0)
+    assert row_u["carry_inr"] == 0.0
+    assert row_u["residual_inr"] == 0.0
+    assert row_u["total_pnl_inr"] == pytest.approx(-120.0)
+    assert verify_attribution_identity(attr_unhedged)
 
 
 def test_include_idle_sessions() -> None:
