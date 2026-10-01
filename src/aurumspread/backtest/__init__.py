@@ -21,21 +21,33 @@ from aurumspread.backtest.liquidity import (
 )
 from aurumspread.backtest.manifest import RunManifest, RunStamp, stamp_run
 from aurumspread.backtest.sizing import SizedPair, size_pair
+from aurumspread.backtest.validation import (
+    HurdlesConfig,
+    SignificanceConfig,
+    ValidationConfig,
+    compute_validation_sha256,
+    load_validation,
+)
 
 __all__ = [
     "ATTRIBUTION_COLUMNS",
+    "HurdlesConfig",
     "LiquidityDecision",
     "OrderCost",
     "RoundTripCost",
     "RunManifest",
     "RunStamp",
+    "SignificanceConfig",
     "SizedPair",
+    "ValidationConfig",
     "WalkForwardResult",
     "cap_to_participation",
     "compute_daily_attribution",
+    "compute_validation_sha256",
     "estimate_round_trip_cost",
     "filter_liquid",
     "flag_residual_outliers",
+    "load_validation",
     "order_cost_inr",
     "passes_liquidity",
     "size_pair",
