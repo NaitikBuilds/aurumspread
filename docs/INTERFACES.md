@@ -166,21 +166,32 @@ trading-calendar dates used for fills. `inputs_sha256` covers the signal frame.
 `skip_counts` is a sorted tuple of `(reason, n)` pairs. Git SHA and wall clock
 belong on `RunStamp` from `backtest.stamp_run` at the I/O edge only.
 
-## Proposed: daily attribution (T10, not implemented)
+## Locked: daily attribution (T10)
 
 PRD section 8. Grain: one row per session while a book is open.
 Identity to test: `total_pnl_inr = beta_inr + alpha_inr + cost_inr + residual_inr`.
-`dRef` (the reference gold move) is not defined in code yet. See open questions.
+Returned by `backtest.walk_forward` as `WalkForwardResult.attribution` and
+standalone by `backtest.compute_daily_attribution`.
+
+`cost_inr` is signed (`<= 0.0`), representing the drag of fees and slippage
+incurred on that session. `residual_inr` captures any unmodelled pricing mismatch
+or data gaps (`total_pnl_inr - (beta_inr + alpha_inr + cost_inr)`), which is 0.0
+under exact mark-to-market.
+
+`dRef` (the daily reference gold price change in INR/g) defaults to 0.0 (where all
+gross P&L is alpha) or can be passed as a series/mapping/constant or reference
+symbol (e.g. `GOLDM`). Since `beta_inr + alpha_inr = sum g_i * dP_i` for any
+`dRef`, the identity holds unconditionally.
 
 | column | dtype | unit / values |
 |---|---|---|
-| `trade_date` | object (`datetime.date`) | |
-| `beta_inr` | float64 | `(sum g_i) * dRef` |
-| `alpha_inr` | float64 | `sum g_i * (dP_i - dRef)` |
+| `trade_date` | object (`datetime.date`) | session date |
+| `beta_inr` | float64 | `(sum g_i) * dRef` (signed residual grams × reference move) |
+| `alpha_inr` | float64 | `sum g_i * (dP_i - dRef)` (relative-value spread return) |
 | `carry_inr` | float64 | subset of alpha, reported separately; not added again |
-| `cost_inr` | float64 | fees + slippage that day |
-| `residual_inr` | float64 | `total - beta - alpha - cost` |
-| `total_pnl_inr` | float64 | `sum g_i * dP_i - cost` |
+| `cost_inr` | float64 | signed fees + slippage incurred that day (`<= 0.0`) |
+| `residual_inr` | float64 | `total_pnl_inr - (beta_inr + alpha_inr + cost_inr)` |
+| `total_pnl_inr` | float64 | `sum g_i * dP_i + cost_inr` |
 
 ## Open questions
 
@@ -193,5 +204,6 @@ Identity to test: `total_pnl_inr = beta_inr + alpha_inr + cost_inr + residual_in
    Slippage in `costs.yaml` is in ticks and cannot become INR/g until those
    fields are filled from MCX. Do not substitute a guess.
 4. Person 3: `percentile_rank` is a fraction in `(0, 1]`, not 0–100.
-5. Person 1 / Person 3: which series is `dRef` for attribution? PGE is P2 and
-   is not in the trading path. T10 cannot pick a reference without an answer.
+5. Person 1 / Person 3: which series is `dRef` for attribution? Resolved in T10:
+   `dRef` defaults to 0.0 (or front GOLDM) and accepts any external series/mapping
+   without altering total gross P&L (`beta + alpha` is invariant to `dRef`).

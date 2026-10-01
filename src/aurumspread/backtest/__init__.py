@@ -1,5 +1,10 @@
 """Backtest: costs, liquidity, lot sizing, and the walk-forward engine."""
 
+from aurumspread.backtest.attribution import (
+    ATTRIBUTION_COLUMNS,
+    compute_daily_attribution,
+    verify_attribution_identity,
+)
 from aurumspread.backtest.costs import (
     OrderCost,
     RoundTripCost,
@@ -17,6 +22,7 @@ from aurumspread.backtest.manifest import RunManifest, RunStamp, stamp_run
 from aurumspread.backtest.sizing import SizedPair, size_pair
 
 __all__ = [
+    "ATTRIBUTION_COLUMNS",
     "LiquidityDecision",
     "OrderCost",
     "RoundTripCost",
@@ -25,11 +31,13 @@ __all__ = [
     "SizedPair",
     "WalkForwardResult",
     "cap_to_participation",
+    "compute_daily_attribution",
     "estimate_round_trip_cost",
     "filter_liquid",
     "order_cost_inr",
     "passes_liquidity",
     "size_pair",
     "stamp_run",
+    "verify_attribution_identity",
     "walk_forward",
 ]

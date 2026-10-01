@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
 
 import pandas as pd
 
+from aurumspread.backtest.attribution import ATTRIBUTION_COLUMNS, compute_daily_attribution
 from aurumspread.backtest.costs import order_cost_inr
 from aurumspread.backtest.liquidity import passes_liquidity
 from aurumspread.backtest.manifest import RunManifest, config_sha256, frame_sha256
@@ -91,6 +93,7 @@ class WalkForwardResult:
     skips: pd.DataFrame
     skip_counts: dict[str, int]
     manifest: RunManifest
+    attribution: pd.DataFrame
 
 
 @dataclass
@@ -128,6 +131,7 @@ def walk_forward(
     multiplier: float = 1.0,
     allow_test: bool = False,
     calendar: TradingCalendar | None = None,
+    d_ref: float | pd.Series | Mapping[date, float] | Callable[[date], float] | str | None = None,
 ) -> WalkForwardResult:
     """Run the day loop on a signal frame that already contains z-scores.
 
@@ -168,6 +172,7 @@ def walk_forward(
             skips=_as_frame([], SKIP_COLUMNS),
             skip_counts={},
             manifest=empty_manifest,
+            attribution=_as_frame([], ATTRIBUTION_COLUMNS),
         )
 
     frame = signals.copy()
@@ -237,11 +242,23 @@ def walk_forward(
         skip_counts=tuple(skip_counts.items()),
         split_frozen=backtest.split.is_frozen,
     )
+    trades_df = _as_frame(trades, TRADE_COLUMNS)
+    skips_df = _as_frame(skips, SKIP_COLUMNS)
+    attribution_df = compute_daily_attribution(
+        trades_df,
+        frame,
+        d_ref=d_ref,
+        calendar=sessions,
+        costs=costs,
+        contracts=contracts,
+        multiplier=multiplier,
+    )
     return WalkForwardResult(
-        trades=_as_frame(trades, TRADE_COLUMNS),
-        skips=_as_frame(skips, SKIP_COLUMNS),
+        trades=trades_df,
+        skips=skips_df,
         skip_counts=skip_counts,
         manifest=manifest,
+        attribution=attribution_df,
     )
 
 

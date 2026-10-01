@@ -139,6 +139,7 @@ def test_two_runs_match_including_the_manifest() -> None:
     second = _run()
     pd.testing.assert_frame_equal(first.trades, second.trades)
     pd.testing.assert_frame_equal(first.skips, second.skips)
+    pd.testing.assert_frame_equal(first.attribution, second.attribution)
     assert first.manifest == second.manifest
     assert first.manifest.split_frozen is False
     assert first.manifest.n_trades == 1
