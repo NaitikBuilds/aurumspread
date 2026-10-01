@@ -21,6 +21,10 @@ from aurumspread.backtest.liquidity import (
 )
 from aurumspread.backtest.manifest import RunManifest, RunStamp, stamp_run
 from aurumspread.backtest.sizing import SizedPair, size_pair
+from aurumspread.backtest.stats import (
+    PerformanceStats,
+    compute_performance_stats,
+)
 from aurumspread.backtest.validation import (
     HurdlesConfig,
     SignificanceConfig,
@@ -34,6 +38,7 @@ __all__ = [
     "HurdlesConfig",
     "LiquidityDecision",
     "OrderCost",
+    "PerformanceStats",
     "RoundTripCost",
     "RunManifest",
     "RunStamp",
@@ -43,6 +48,7 @@ __all__ = [
     "WalkForwardResult",
     "cap_to_participation",
     "compute_daily_attribution",
+    "compute_performance_stats",
     "compute_validation_sha256",
     "estimate_round_trip_cost",
     "filter_liquid",
