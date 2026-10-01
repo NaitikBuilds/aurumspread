@@ -202,10 +202,10 @@ What `residual_inr` DOES NOT test:
 incurred on that session.
 
 `dRef` (the daily reference gold price change in INR/g):
-Person 2 proposes the front-month gold outright price change (e.g. front GOLDM)
-as the default reference series, with 0.0 as an explicit override. If `dRef`
-defaults to 0.0, `beta_inr` is then zero by construction and all gross P&L is
-attributed to `alpha_inr`.
+In code (`compute_daily_attribution` and `walk_forward`), `dRef` currently defaults
+to `0.0` (via `d_ref=None`), so `beta_inr` is zero by construction. Person 2
+proposes the front-month gold outright price change (e.g. front GOLDM) as the
+default reference series, with 0.0 as an explicit override.
 Trade-offs:
 - Front-month outright (proposed): captures market gold movement, isolating net
   gram exposure (`residual_g * dRef`) as macro beta, so alpha represents pure
@@ -214,7 +214,7 @@ Trade-offs:
 - Null reference (`0.0` override): assumption-free and requires no reference
   series, but sets beta to zero by construction, masking directional exposure
   on unhedged/residual grams.
-This proposal requires Person 1 / Person 3 approval.
+This proposal requires Person 1 / Person 3 approval (see open question 5).
 
 | column | dtype | unit / values |
 |---|---|---|
@@ -225,6 +225,42 @@ This proposal requires Person 1 / Person 3 approval.
 | `cost_inr` | float64 | signed fees + slippage incurred that day (`<= 0.0`) |
 | `residual_inr` | float64 | `total_pnl_inr - (beta_inr + alpha_inr + cost_inr)` |
 | `total_pnl_inr` | float64 | portfolio mark-to-market P&L (independent of beta/alpha/cost) |
+
+### Proposed: execution_inr column (T10+ proposal, NOT IMPLEMENTED)
+
+To isolate execution quality (fill vs mark difference) from residual accounting discrepancies,
+Person 2 proposes an `execution_inr` column for daily attribution.
+
+#### Proposed schema diff:
+```diff
+ | column | dtype | unit / values |
+ |---|---|---|
+ | `trade_date` | object (`datetime.date`) | session date |
+ | `beta_inr` | float64 | `(sum g_i) * dRef` (residual grams × reference move) |
+ | `alpha_inr` | float64 | `sum g_i * (dP_i - dRef)` (relative-value spread return) |
+ | `carry_inr` | float64 | subset of alpha, reported separately; not added again |
++| `execution_inr` | float64 | signed fill-vs-mark difference on entry/exit sessions |
+ | `cost_inr` | float64 | signed fees + slippage incurred that day (`<= 0.0`) |
+-| `residual_inr` | float64 | `total_pnl_inr - (beta_inr + alpha_inr + cost_inr)` |
++| `residual_inr` | float64 | `total_pnl_inr - (beta_inr + alpha_inr + execution_inr + cost_inr)` |
+ | `total_pnl_inr` | float64 | portfolio mark-to-market P&L (independent of beta/alpha/cost) |
+```
+
+#### Double-count risk once tick slippage is converted to INR/g:
+1. `cost_inr` in T08 already deducts modeled slippage:
+   `slippage_inr = ticks * tick_size_inr * multiplier`.
+2. In backtests or live trading where fill prices reflect real market execution:
+   - The fill-vs-mark difference `sum qty_g * (fill_price - mark_price)` directly
+     measures the realized execution drag / slippage.
+   - If that drag is captured in `execution_inr` while `cost_inr` simultaneously
+     deducts modeled tick slippage, **execution slippage is double-counted**!
+3. Mitigation: Once Person 1 populates `tick_size_inr` and tick slippage is
+   converted to INR/g:
+   - Either `cost_inr` in attribution must only contain explicit out-of-pocket fees
+     (brokerage, exchange, SEBI, CTT, stamp duty, GST), leaving all execution slippage
+     in `execution_inr`;
+   - Or fills in backtest are simulated at settlement marks and all slippage drag is
+     retained solely in `cost_inr`, leaving `execution_inr` at 0.0.
 
 ## Open questions
 
