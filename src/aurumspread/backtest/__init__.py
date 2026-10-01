@@ -32,6 +32,11 @@ from aurumspread.backtest.validation import (
     compute_validation_sha256,
     load_validation,
 )
+from aurumspread.backtest.verdict import (
+    StrategyVerdict,
+    VerdictStatus,
+    evaluate_verdict,
+)
 
 __all__ = [
     "ATTRIBUTION_COLUMNS",
@@ -44,13 +49,16 @@ __all__ = [
     "RunStamp",
     "SignificanceConfig",
     "SizedPair",
+    "StrategyVerdict",
     "ValidationConfig",
+    "VerdictStatus",
     "WalkForwardResult",
     "cap_to_participation",
     "compute_daily_attribution",
     "compute_performance_stats",
     "compute_validation_sha256",
     "estimate_round_trip_cost",
+    "evaluate_verdict",
     "filter_liquid",
     "flag_residual_outliers",
     "load_validation",
