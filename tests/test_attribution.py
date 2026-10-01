@@ -405,6 +405,86 @@ def test_walk_forward_entry_inside_exit_buffer_skipped() -> None:
     assert result.attribution.empty
 
 
+def test_public_compute_daily_attribution_same_session_trade() -> None:
+    """Public compute_daily_attribution handles same-session trades (gross -100 INR).
+
+    Even though the daily walk_forward engine skips entries inside exit buffer,
+    compute_daily_attribution is a public library function that can receive
+    external trade logs (e.g. intraday executions, emergency unwinds).
+    For a single-session trade (entry_date == exit_date, n_sessions == 1):
+      - Gross P&L is carried in alpha + beta (dp_sig = exit_fill - entry_fill).
+      - Residual is strictly 0.0.
+    """
+    entry_fill_date = date(2026, 1, 7)
+    trade = pd.DataFrame(
+        [
+            {
+                "trade_id": 1,
+                "symbol_a": "GOLDM",
+                "expiry_a": EXPIRY_A,
+                "symbol_b": "GOLDTEN",
+                "expiry_b": date(2026, 1, 12),
+                "entry_fill_date": entry_fill_date,
+                "exit_fill_date": entry_fill_date,
+                "qty_g_a": -100.0,
+                "qty_g_b": 100.0,
+                "residual_g": 0.0,
+                "side": "short_spread",
+                "entry_fill_a_inr_per_g": 10.0,
+                "entry_fill_b_inr_per_g": 10.0,
+                "exit_fill_a_inr_per_g": 11.0,
+                "exit_fill_b_inr_per_g": 10.0,
+                "cost_inr": 20.0,
+                "exit_reason": "emergency_stop",
+            }
+        ]
+    )
+    signals = pd.DataFrame(
+        [
+            {
+                "trade_date": entry_fill_date,
+                "symbol_a": "GOLDM",
+                "expiry_a": EXPIRY_A,
+                "symbol_b": "GOLDTEN",
+                "expiry_b": date(2026, 1, 12),
+                "price_a_inr_per_g": 11.0,
+                "price_b_inr_per_g": 10.0,
+                "carry_b_inr_per_g_per_day": 0.05,
+            }
+        ]
+    )
+
+    # 1. d_ref = 0.0 (default): gross P&L (-100 INR) carried in alpha, beta = 0, residual = 0
+    attr = compute_daily_attribution(trade, signals, d_ref=0.0)
+    assert len(attr) == 1
+    row = attr.iloc[0]
+    assert row["trade_date"] == entry_fill_date
+    assert row["beta_inr"] == 0.0
+    assert row["alpha_inr"] == pytest.approx(-100.0)
+    assert row["carry_inr"] == 0.0  # Entry session carry is strictly 0.0
+    assert row["cost_inr"] == pytest.approx(-20.0)
+    assert row["residual_inr"] == 0.0
+    assert row["total_pnl_inr"] == pytest.approx(-120.0)
+    assert verify_attribution_identity(attr)
+
+    # 2. d_ref = 2.5 with unhedged grams: beta + alpha carry gross -100 INR, residual = 0
+    trade_unhedged = trade.copy()
+    trade_unhedged["qty_g_b"] = 90.0
+    trade_unhedged["residual_g"] = -10.0
+    # gross = -100 * (11 - 10) + 90 * (10 - 10) = -100.0 INR
+    attr_unhedged = compute_daily_attribution(trade_unhedged, signals, d_ref=2.5)
+    row_u = attr_unhedged.iloc[0]
+    # beta = -10.0 * 2.5 = -25.0 INR
+    # alpha = -100 * (1.0 - 2.5) + 90 * (0.0 - 2.5) = 150 - 225 = -75.0 INR
+    assert row_u["beta_inr"] == pytest.approx(-25.0)
+    assert row_u["alpha_inr"] == pytest.approx(-75.0)
+    assert row_u["beta_inr"] + row_u["alpha_inr"] == pytest.approx(-100.0)
+    assert row_u["carry_inr"] == 0.0
+    assert row_u["residual_inr"] == 0.0
+    assert row_u["total_pnl_inr"] == pytest.approx(-120.0)
+    assert verify_attribution_identity(attr_unhedged)
+
+
 def test_include_idle_sessions() -> None:
     result = _run()
     calendar = TradingCalendar(DAYS)
