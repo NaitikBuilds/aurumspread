@@ -178,7 +178,9 @@ mark-to-market (entry and exit execution fills and daily settlement marks minus
 fees paid, or `daily_mtm` if provided), not from the sum of the attribution
 columns. `residual_inr` measures the tracking difference
 `total_pnl_inr - (beta_inr + alpha_inr + cost_inr)`. Flagged by
-`backtest.flag_residual_outliers` against `residual_tolerance_inr` in `backtest.yaml`.
+`backtest.flag_residual_outliers(attribution, tolerance)` against `residual_tolerance_inr`
+passed explicitly as a required float by callers (e.g. from `backtest.yaml`, with
+no internal config file I/O).
 
 ### What residual_inr does and does not test
 

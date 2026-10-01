@@ -39,7 +39,7 @@ from typing import Any
 import pandas as pd
 
 from aurumspread.backtest.costs import order_cost_inr
-from aurumspread.config import BacktestConfig, ContractsConfig, CostsConfig, load_backtest
+from aurumspread.config import ContractsConfig, CostsConfig
 from aurumspread.core.calendar import TradingCalendar
 
 ATTRIBUTION_COLUMNS = (
@@ -417,9 +417,7 @@ def compute_daily_attribution(
 
 def flag_residual_outliers(
     attribution: pd.DataFrame,
-    tolerance: float | BacktestConfig | None = None,
-    *,
-    backtest: BacktestConfig | None = None,
+    tolerance: float,
 ) -> pd.DataFrame:
     """Flag sessions where |residual_inr| exceeds the configured tolerance.
 
@@ -427,12 +425,10 @@ def flag_residual_outliers(
     ----------
     attribution : pd.DataFrame
         Daily attribution table containing 'residual_inr'.
-    tolerance : float or BacktestConfig, optional
-        Maximum allowable absolute residual in INR before flagging, or a
-        BacktestConfig instance providing residual_tolerance_inr. If omitted,
-        taken from backtest or load_backtest().
-    backtest : BacktestConfig, optional
-        Backtest configuration containing residual_tolerance_inr.
+    tolerance : float
+        Maximum allowable absolute residual in INR before flagging. Callers
+        typically pass `backtest.residual_tolerance_inr` from configuration.
+        Must be a non-negative float.
 
     Returns
     -------
@@ -442,14 +438,9 @@ def flag_residual_outliers(
     if attribution.empty:
         return attribution.copy()
 
-    if isinstance(tolerance, BacktestConfig):
-        tol = float(tolerance.residual_tolerance_inr)
-    elif isinstance(tolerance, (int, float)):
-        tol = float(tolerance)
-    elif backtest is not None:
-        tol = float(backtest.residual_tolerance_inr)
-    else:
-        tol = float(load_backtest().residual_tolerance_inr)
+    tol = float(tolerance)
+    if tol < 0.0:
+        raise ValueError(f"tolerance must be non-negative, got {tolerance}")
 
     mask = attribution["residual_inr"].abs() > tol
     return attribution.loc[mask].copy().reset_index(drop=True)

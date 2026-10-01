@@ -607,25 +607,28 @@ def test_flag_residual_outliers_and_backtest_yaml_tolerance() -> None:
         contracts=contracts,
     )
 
-    # 1. Takes tolerance directly from BacktestConfig keyword argument
-    flagged_from_cfg = flag_residual_outliers(attr, backtest=cfg)
+    # 1. Takes tolerance directly as float from BacktestConfig keyword argument
+    flagged_from_cfg = flag_residual_outliers(attr, tolerance=cfg.residual_tolerance_inr)
     assert len(flagged_from_cfg) == 1
     assert flagged_from_cfg.iloc[0]["trade_date"] == DAYS[3]
     assert flagged_from_cfg.iloc[0]["residual_inr"] == pytest.approx(0.50)
 
-    # 2. Passes BacktestConfig positionally
-    flagged_pos = flag_residual_outliers(attr, cfg)
+    # 2. Passes float positionally
+    flagged_pos = flag_residual_outliers(attr, cfg.residual_tolerance_inr)
     assert len(flagged_pos) == 1
     assert flagged_pos.iloc[0]["trade_date"] == DAYS[3]
 
-    # 3. Default without arguments pulls tolerance from BacktestConfig
-    flagged_default = flag_residual_outliers(attr)
-    assert len(flagged_default) == 1
-    assert flagged_default.iloc[0]["trade_date"] == DAYS[3]
-
-    # 4. With wide tolerance 1.0 override: |0.50| <= 1.0, no days are flagged
+    # 3. With wide tolerance 1.0 override: |0.50| <= 1.0, no days are flagged
     not_flagged = flag_residual_outliers(attr, tolerance=1.0)
     assert not_flagged.empty
+
+    # 4. Calling without tolerance raises TypeError (tolerance is required)
+    with pytest.raises(TypeError):
+        flag_residual_outliers(attr)  # type: ignore[call-arg]
+
+    # 5. Negative tolerance raises ValueError
+    with pytest.raises(ValueError, match="non-negative"):
+        flag_residual_outliers(attr, tolerance=-0.01)
 
 
 def test_missing_mark_mid_hold_produces_reversing_residual() -> None:
