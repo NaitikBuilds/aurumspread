@@ -224,6 +224,50 @@ def test_exit_buffer_fills_the_same_session_from_dte_not_prices() -> None:
     assert again.trades.iloc[0]["exit_fill_a_inr_per_g"] == pytest.approx(10.0)
 
 
+def test_entry_on_fill_date_inside_exit_buffer_is_skipped() -> None:
+    # Expiry 12 Jan, buffer=5 -> first buffer day is 7 Jan.
+    # Warmup Jan 1-3. Signal on Jan 6 (DTE 6, status live).
+    # Fill date is Jan 7 (DTE 5, inside exit buffer).
+    # Engine must skip entry with reason 'entry_inside_exit_buffer'.
+    days = [date(2026, 1, day) for day in range(1, 11)]
+    expiry_b = date(2026, 1, 12)
+    zscores = [0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0]
+    rows = []
+    for day, zscore in zip(days, zscores, strict=True):
+        rows.append(
+            {
+                "trade_date": day,
+                "symbol_a": "GOLDM",
+                "expiry_a": EXPIRY_A,
+                "symbol_b": "GOLDTEN",
+                "expiry_b": expiry_b,
+                "zscore": zscore,
+                "price_a_inr_per_g": 10.0,
+                "price_b_inr_per_g": 10.0,
+                "volume_a": 10.0,
+                "open_interest_a": 10.0,
+                "volume_b": 10.0,
+                "open_interest_b": 10.0,
+                "thin_a": False,
+                "thin_b": False,
+                "status_a": "live",
+                "status_b": "live",
+            }
+        )
+    frame = pd.DataFrame(rows)
+    result = _run(frame)
+
+    assert result.trades.empty
+    assert len(result.skips) == 1
+    skip = result.skips.iloc[0]
+    assert skip["trade_date"] == date(2026, 1, 7)
+    assert skip["reason"] == "entry_inside_exit_buffer"
+    assert result.skip_counts == {"entry_inside_exit_buffer": 1}
+    assert result.manifest.n_trades == 0
+    assert result.manifest.n_skips == 1
+    assert result.manifest.skip_counts == (("entry_inside_exit_buffer", 1),)
+
+
 def test_spoofed_status_does_not_same_session_exit() -> None:
     frame = _frame()
     frame.loc[frame["trade_date"] == DAYS[4], "status_a"] = "exit_buffer"

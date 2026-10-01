@@ -6,8 +6,9 @@ in the signal frame. Exit-buffer exits fill on the same day, and that trigger
 uses listing + days-to-expiry only (Person 1 ``contract_status``).
 
 An entry is skipped when lot size or fee inputs are still null, when either
-leg fails the liquidity check, or when the date is warmup, embargo, or an
-unopened TEST window. Null costs are not treated as zero.
+leg fails the liquidity check, when the date is warmup, embargo, or an
+unopened TEST window, or when the fill date falls inside the exit buffer
+(``entry_inside_exit_buffer``). Null costs are not treated as zero.
 
 The function is pure: the same inputs always return the same trades, skips,
 and manifest. It does not read the clock or the git repository.
@@ -193,7 +194,7 @@ def walk_forward(
     skips: list[dict] = []
 
     for today in sessions.dates:
-        _apply_entries(today, rows, pending, open_positions, skips)
+        _apply_entries(today, rows, pending, open_positions, skips, contracts, backtest)
         _apply_scheduled_exits(today, rows, open_positions, trades, costs, contracts, multiplier)
         _force_or_schedule_exits(
             today,
@@ -368,11 +369,16 @@ def _apply_entries(
     pending: dict[tuple, _PendingEntry],
     open_positions: dict[tuple, _Position],
     skips: list[dict],
+    contracts: ContractsConfig,
+    backtest: BacktestConfig,
 ) -> None:
     for pair, order in list(pending.items()):
         if order.fill_date != today:
             continue
         pending.pop(pair)
+        if _calendar_forced_exit(today, pair, contracts, backtest):
+            skips.append(_skip(today, pair, "entry_inside_exit_buffer"))
+            continue
         row = rows.get((today, *pair))
         if row is None:
             skips.append(_skip(today, pair, "missing_fill_bar"))

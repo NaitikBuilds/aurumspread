@@ -207,17 +207,17 @@ incurred on that session.
 
 ### Same-session trades and fill pricing
 
-In the `walk_forward` engine, trades that enter and exit on the same session
-(e.g., when an entry fills on date $t$ and calendar `exit_buffer` fires immediately
-due to $DTE \le \text{exit\_buffer\_days\_before\_expiry}$) are priced on daily settlement bars.
-Under daily bar execution, `entry_fill_a_inr_per_g` and `exit_fill_a_inr_per_g` both execute
-at session $t$'s settlement price (`row["price_a_inr_per_g"]`). Because only one closing price
-per contract exists per session, `entry_fill == exit_fill` and `gross_pnl_inr == 0.0` by construction.
-Net P&L is negative solely due to round-trip execution costs (`-cost_inr`).
+In the `walk_forward` engine, positions are never entered on a session that is already
+inside the calendar exit buffer ($DTE \le \text{exit\_buffer\_days\_before\_expiry}$).
+When an order's scheduled fill date arrives inside the exit buffer, `_apply_entries`
+skips the entry with reason `"entry_inside_exit_buffer"`, recorded in `skips`,
+`skip_counts`, and the `RunManifest`. This prevents zero-gross, fee-losing same-session
+round trips by construction.
 
-In daily attribution, with `dp_sig` taken from fills (`exit_fill - entry_fill = 0.0`),
-`alpha_inr = 0.0`, `beta_inr = 0.0`, `mtm_gross = 0.0`, and `residual_inr` is zero by construction
-for single-session trades.
+If an intraday trade log with same-session fills (e.g. from an intraday execution source)
+is passed directly to `compute_daily_attribution`, `dp_sig` taken from execution fills
+(`exit_fill - entry_fill`) decomposes gross P&L into alpha and beta, with `residual_inr`
+zero by construction.
 
 `dRef` (the daily reference gold price change in INR/g):
 In code (`compute_daily_attribution` and `walk_forward`), `dRef` currently defaults
