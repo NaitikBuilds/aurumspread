@@ -25,3 +25,4 @@ liquidity:
   max_participation_pct_of_volume: 5
 capital_inr: 1000000
 fill_rule: next_day_settlement
+residual_tolerance_inr: 0.01  # flag sessions where |residual_inr| exceeds tolerance (e.g. data gaps or rounding)

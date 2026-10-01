@@ -3,6 +3,7 @@
 from aurumspread.backtest.attribution import (
     ATTRIBUTION_COLUMNS,
     compute_daily_attribution,
+    flag_residual_outliers,
     verify_attribution_identity,
 )
 from aurumspread.backtest.costs import (
@@ -34,6 +35,7 @@ __all__ = [
     "compute_daily_attribution",
     "estimate_round_trip_cost",
     "filter_liquid",
+    "flag_residual_outliers",
     "order_cost_inr",
     "passes_liquidity",
     "size_pair",

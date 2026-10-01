@@ -16,9 +16,11 @@ import pytest
 from aurumspread.backtest import (
     ATTRIBUTION_COLUMNS,
     compute_daily_attribution,
+    flag_residual_outliers,
     verify_attribution_identity,
     walk_forward,
 )
+from aurumspread.backtest.costs import order_cost_inr
 from aurumspread.config import load_backtest, load_contracts, load_costs
 from aurumspread.core.calendar import TradingCalendar
 
@@ -427,3 +429,101 @@ def test_attribution_columns_and_types() -> None:
         "total_pnl_inr",
     ):
         assert attr[col].dtype == "float64"
+
+
+# ---------------------------------------------------------------------------
+# 7. Residual Tolerance and T08 Cost Model Validation
+# ---------------------------------------------------------------------------
+
+
+def test_cost_inr_per_session_equals_t08_order_costs() -> None:
+    """Validate that daily cost_inr matches the T08 order_cost_inr model exactly."""
+    result = _run()
+    backtest, costs, contracts = _configs()
+    attr = result.attribution.set_index("trade_date")
+
+    # Short spread: entry sells A and buys B at 10 INR/g; exit buys A at 12 and sells B at 10 INR/g
+    entry_cost_a = order_cost_inr(
+        "GOLDM", "sell", 100.0 * 10.0, thin=False, costs=costs, contracts=contracts
+    )
+    entry_cost_b = order_cost_inr(
+        "GOLDTEN", "buy", 100.0 * 10.0, thin=False, costs=costs, contracts=contracts
+    )
+    expected_entry_total = entry_cost_a.total_inr + entry_cost_b.total_inr
+
+    exit_cost_a = order_cost_inr(
+        "GOLDM", "buy", 100.0 * 12.0, thin=False, costs=costs, contracts=contracts
+    )
+    exit_cost_b = order_cost_inr(
+        "GOLDTEN", "sell", 100.0 * 10.0, thin=False, costs=costs, contracts=contracts
+    )
+    expected_exit_total = exit_cost_a.total_inr + exit_cost_b.total_inr
+
+    # Day 4 (entry fill session): cost_inr must equal -expected_entry_total
+    assert attr.loc[DAYS[3], "cost_inr"] == pytest.approx(-expected_entry_total)
+
+    # Day 5 (holding session): no orders, cost_inr must be 0.0
+    assert attr.loc[DAYS[4], "cost_inr"] == pytest.approx(0.0)
+
+    # Day 6 (exit fill session): cost_inr must equal -expected_exit_total
+    assert attr.loc[DAYS[5], "cost_inr"] == pytest.approx(-expected_exit_total)
+
+
+def test_non_zero_residual_from_fill_rounding_discrepancy() -> None:
+    """Hand-computed fixture with a small non-zero residual due to fill rounding.
+
+    Suppose execution entry fill on Day 4 occurred at 10.005 INR/g, while the
+    daily signal bar is rounded to 10.00 INR/g.
+    For short 100g of Leg A:
+      Actual MTM gross on Day 4: -100 * (10.00 - 10.005) = +0.50 INR.
+      Model signal gross on Day 4: -100 * (10.00 - 10.00) = 0.00 INR.
+      Tracking error residual_inr = +0.50 INR.
+    """
+    result = _run()
+    trades_mod = result.trades.copy()
+    # Introduce a 0.005 INR/g execution fill difference on leg A
+    trades_mod.loc[0, "entry_fill_a_inr_per_g"] = 10.005
+
+    backtest, costs, contracts = _configs()
+    attr = compute_daily_attribution(
+        trades_mod,
+        _frame(),
+        costs=costs,
+        contracts=contracts,
+    )
+
+    day4 = attr.set_index("trade_date").loc[DAYS[3]]
+    # Assert exact hand-computed residual value (+0.50 INR)
+    assert day4["residual_inr"] == pytest.approx(0.50, abs=1e-6)
+    # Core identity total_pnl_inr == beta_inr + alpha_inr + cost_inr + residual_inr holds!
+    assert verify_attribution_identity(attr)
+
+
+def test_flag_residual_outliers_and_backtest_yaml_tolerance() -> None:
+    """Verify residual tolerance in backtest.yaml and outlier flagging."""
+    cfg = load_backtest()
+    assert hasattr(cfg, "residual_tolerance_inr")
+    assert cfg.residual_tolerance_inr == 0.01
+
+    result = _run()
+    trades_mod = result.trades.copy()
+    # 0.005 INR/g fill difference -> 0.50 INR residual on 100g
+    trades_mod.loc[0, "entry_fill_a_inr_per_g"] = 10.005
+
+    backtest, costs, contracts = _configs()
+    attr = compute_daily_attribution(
+        trades_mod,
+        _frame(),
+        costs=costs,
+        contracts=contracts,
+    )
+
+    # With default tolerance 0.01: Day 4 has |0.50| > 0.01, so it is flagged
+    flagged = flag_residual_outliers(attr, tolerance=cfg.residual_tolerance_inr)
+    assert len(flagged) == 1
+    assert flagged.iloc[0]["trade_date"] == DAYS[3]
+    assert flagged.iloc[0]["residual_inr"] == pytest.approx(0.50)
+
+    # With wide tolerance 1.0: |0.50| <= 1.0, no days are flagged
+    not_flagged = flag_residual_outliers(attr, tolerance=1.0)
+    assert not_flagged.empty

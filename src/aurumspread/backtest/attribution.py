@@ -5,7 +5,8 @@ Decomposes daily strategy performance into:
 - Alpha: relative-value spread move sum g_i * (dP_i - dRef).
 - Carry: roll-down / implied carry accrual (reported separately as a subset of alpha).
 - Cost: signed drag of transaction fees and slippage (<= 0.0).
-- Residual: difference between total P&L and components (0.0 under exact mark-to-market).
+- Residual: tracking difference between independent mark-to-market total P&L and
+  attribution model components (total_pnl_inr - (beta_inr + alpha_inr + cost_inr)).
 
 Mathematical identity:
     total_pnl_inr = beta_inr + alpha_inr + cost_inr + residual_inr
@@ -45,9 +46,17 @@ def compute_daily_attribution(
     costs: CostsConfig | None = None,
     contracts: ContractsConfig | None = None,
     multiplier: float = 1.0,
+    daily_mtm: Mapping[date, float] | pd.Series | None = None,
+    mark_prices: pd.DataFrame | None = None,
     include_idle: bool = False,
 ) -> pd.DataFrame:
     """Compute daily attribution from closed trades and signal price series.
+
+    total_pnl_inr is computed independently from the trade log / mark-to-market
+    (entry/exit execution fills and daily settlement marks minus fees paid, or
+    daily_mtm if provided), not from the sum of the attribution columns.
+    residual_inr measures any tracking difference between mark-to-market P&L
+    and (beta_inr + alpha_inr + cost_inr).
 
     Parameters
     ----------
@@ -61,8 +70,8 @@ def compute_daily_attribution(
         price_a_inr_per_g, price_b_inr_per_g, and optional carry_b_inr_per_g_per_day.
     d_ref : float, Series, Mapping, Callable, str, or None, default None
         Reference gold price change (INR/g) on each session. Defaults to 0.0
-        (pure alpha view). A symbol name (e.g. "GOLDM") extracts daily reference
-        returns from the signal frame.
+        (where beta is zero by construction). A symbol name (e.g. "GOLDM")
+        extracts daily reference returns from the signal frame.
     calendar : TradingCalendar, optional
         Trading calendar for determining sessions between entry and exit.
     costs : CostsConfig, optional
@@ -71,6 +80,10 @@ def compute_daily_attribution(
         Contract specifications.
     multiplier : float, default 1.0
         Stress multiplier on fees and slippage.
+    daily_mtm : Mapping or Series, optional
+        Independent daily mark-to-market P&L stream if supplied externally.
+    mark_prices : pd.DataFrame, optional
+        Independent contract closing marks if distinct from signals.
     include_idle : bool, default False
         If True, includes calendar dates with zero P&L when no book was open.
 
@@ -80,7 +93,7 @@ def compute_daily_attribution(
         Daily attribution table keyed by session trade_date.
     """
     if hasattr(trades, "attribution") and isinstance(trades.attribution, pd.DataFrame):
-        if d_ref is None and costs is None and not include_idle:
+        if d_ref is None and costs is None and not include_idle and daily_mtm is None:
             return trades.attribution
 
     trades_df = getattr(trades, "trades", trades)
@@ -116,7 +129,24 @@ def compute_daily_attribution(
         for _, row in frame.iterrows()
     }
 
-    # Aggregate daily attribution components
+    marks_by_key: dict[tuple, pd.Series] = {}
+    if mark_prices is not None:
+        mp = mark_prices.copy()
+        mp["trade_date"] = mp["trade_date"].map(_as_date)
+        for col in ("expiry_a", "expiry_b"):
+            if col in mp.columns:
+                mp[col] = mp[col].map(_as_date)
+        marks_by_key = {
+            (
+                _as_date(r["trade_date"]),
+                r["symbol_a"],
+                _as_date(r["expiry_a"]),
+                r["symbol_b"],
+                _as_date(r["expiry_b"]),
+            ): r
+            for _, r in mp.iterrows()
+        }
+
     daily_beta: dict[date, float] = defaultdict(float)
     daily_alpha: dict[date, float] = defaultdict(float)
     daily_carry: dict[date, float] = defaultdict(float)
@@ -148,7 +178,6 @@ def compute_daily_attribution(
         if not sessions:
             sessions = [entry_date] if entry_date == exit_date else [entry_date, exit_date]
 
-        # Calculate exact entry and exit fees if configs are available
         entry_fee, exit_fee = _calculate_trade_fees(
             side=side,
             entry_a=entry_fill_a,
@@ -170,64 +199,109 @@ def compute_daily_attribution(
         )
 
         n_sessions = len(sessions)
-        prev_close_a = entry_fill_a
-        prev_close_b = entry_fill_b
+        mtm_prev_close_a = entry_fill_a
+        mtm_prev_close_b = entry_fill_b
+        sig_prev_close_a: float | None = None
+        sig_prev_close_b: float | None = None
 
         for idx, day in enumerate(sessions):
             active_dates.add(day)
-            row = signals_by_key.get((day, *pair))
+            sig_row = signals_by_key.get((day, *pair))
+            mark_row = marks_by_key.get((day, *pair)) if marks_by_key else sig_row
 
-            # Determine day's start and end price for this trade
+            # 1. Independent Mark-to-Market P&L from execution fills and settlement marks
             if idx == 0 and n_sessions == 1:
-                # Same day entry and exit
-                start_a, end_a = entry_fill_a, exit_fill_a
-                start_b, end_b = entry_fill_b, exit_fill_b
+                mtm_start_a, mtm_end_a = entry_fill_a, exit_fill_a
+                mtm_start_b, mtm_end_b = entry_fill_b, exit_fill_b
                 day_fees = entry_fee + exit_fee
             elif idx == 0:
-                # Entry session
-                start_a = entry_fill_a
-                end_a = float(row["price_a_inr_per_g"]) if row is not None else entry_fill_a
-                start_b = entry_fill_b
-                end_b = float(row["price_b_inr_per_g"]) if row is not None else entry_fill_b
+                mtm_start_a = entry_fill_a
+                mtm_end_a = (
+                    float(mark_row["price_a_inr_per_g"]) if mark_row is not None else entry_fill_a
+                )
+                mtm_start_b = entry_fill_b
+                mtm_end_b = (
+                    float(mark_row["price_b_inr_per_g"]) if mark_row is not None else entry_fill_b
+                )
                 day_fees = entry_fee
-                prev_close_a = end_a
-                prev_close_b = end_b
+                mtm_prev_close_a = mtm_end_a
+                mtm_prev_close_b = mtm_end_b
             elif idx == n_sessions - 1:
-                # Exit session
-                start_a = prev_close_a
-                end_a = exit_fill_a
-                start_b = prev_close_b
-                end_b = exit_fill_b
+                mtm_start_a = mtm_prev_close_a
+                mtm_end_a = exit_fill_a
+                mtm_start_b = mtm_prev_close_b
+                mtm_end_b = exit_fill_b
                 day_fees = exit_fee
             else:
-                # Holding session
-                start_a = prev_close_a
-                end_a = float(row["price_a_inr_per_g"]) if row is not None else prev_close_a
-                start_b = prev_close_b
-                end_b = float(row["price_b_inr_per_g"]) if row is not None else prev_close_b
+                mtm_start_a = mtm_prev_close_a
+                mtm_end_a = (
+                    float(mark_row["price_a_inr_per_g"])
+                    if mark_row is not None
+                    else mtm_prev_close_a
+                )
+                mtm_start_b = mtm_prev_close_b
+                mtm_end_b = (
+                    float(mark_row["price_b_inr_per_g"])
+                    if mark_row is not None
+                    else mtm_prev_close_b
+                )
                 day_fees = 0.0
-                prev_close_a = end_a
-                prev_close_b = end_b
+                mtm_prev_close_a = mtm_end_a
+                mtm_prev_close_b = mtm_end_b
 
-            dp_a = end_a - start_a
-            dp_b = end_b - start_b
+            dp_mtm_a = mtm_end_a - mtm_start_a
+            dp_mtm_b = mtm_end_b - mtm_start_b
+            mtm_gross_day = qty_a * dp_mtm_a + qty_b * dp_mtm_b
+            total_day = mtm_gross_day - day_fees
 
-            gross_day = qty_a * dp_a + qty_b * dp_b
+            # 2. Attribution model evaluation from signal price series
+            curr_sig_a = (
+                float(sig_row["price_a_inr_per_g"])
+                if (sig_row is not None and pd.notna(sig_row["price_a_inr_per_g"]))
+                else None
+            )
+            curr_sig_b = (
+                float(sig_row["price_b_inr_per_g"])
+                if (sig_row is not None and pd.notna(sig_row["price_b_inr_per_g"]))
+                else None
+            )
+
+            if idx == 0:
+                # Model signal change on entry session
+                dp_sig_a = 0.0
+                dp_sig_b = 0.0
+                sig_prev_close_a = curr_sig_a
+                sig_prev_close_b = curr_sig_b
+            else:
+                dp_sig_a = (
+                    (curr_sig_a - sig_prev_close_a)
+                    if (curr_sig_a is not None and sig_prev_close_a is not None)
+                    else 0.0
+                )
+                dp_sig_b = (
+                    (curr_sig_b - sig_prev_close_b)
+                    if (curr_sig_b is not None and sig_prev_close_b is not None)
+                    else 0.0
+                )
+                if curr_sig_a is not None:
+                    sig_prev_close_a = curr_sig_a
+                if curr_sig_b is not None:
+                    sig_prev_close_b = curr_sig_b
+
             ref_move = d_ref_fn(day)
             beta_day = res_g * ref_move
-            alpha_day = qty_a * (dp_a - ref_move) + qty_b * (dp_b - ref_move)
+            alpha_day = qty_a * (dp_sig_a - ref_move) + qty_b * (dp_sig_b - ref_move)
 
             # Implied carry accrual (subset of alpha)
             carry_day = 0.0
-            if row is not None and "carry_b_inr_per_g_per_day" in row:
-                carry_rate = row["carry_b_inr_per_g_per_day"]
+            if sig_row is not None and "carry_b_inr_per_g_per_day" in sig_row:
+                carry_rate = sig_row["carry_b_inr_per_g_per_day"]
                 if pd.notna(carry_rate) and math.isfinite(float(carry_rate)):
                     prev_day = sessions[idx - 1] if idx > 0 else day
                     cal_days = max(1, (day - prev_day).days)
                     carry_day = qty_b * float(carry_rate) * cal_days
 
             cost_day = -day_fees
-            total_day = gross_day + cost_day
 
             daily_beta[day] += beta_day
             daily_alpha[day] += alpha_day
@@ -235,7 +309,21 @@ def compute_daily_attribution(
             daily_cost[day] += cost_day
             daily_total[day] += total_day
 
-    # Determine which dates to include
+    # Apply external daily MTM override if supplied
+    if daily_mtm is not None:
+        if isinstance(daily_mtm, pd.Series):
+            for d, val in daily_mtm.items():
+                date_key = _as_date(d)
+                if pd.notna(val):
+                    daily_total[date_key] = float(val)
+                    active_dates.add(date_key)
+        elif isinstance(daily_mtm, Mapping):
+            for d, val in daily_mtm.items():
+                date_key = _as_date(d)
+                if pd.notna(val):
+                    daily_total[date_key] = float(val)
+                    active_dates.add(date_key)
+
     if include_idle:
         all_dates = calendar.dates
     else:
@@ -248,6 +336,7 @@ def compute_daily_attribution(
         carry = daily_carry[day]
         cost = daily_cost[day]
         total = daily_total[day]
+        # residual is the difference between independent total and attribution components
         residual = total - (beta + alpha + cost)
         if abs(residual) < 1e-12:
             residual = 0.0
@@ -265,6 +354,31 @@ def compute_daily_attribution(
         )
 
     return pd.DataFrame(rows, columns=list(ATTRIBUTION_COLUMNS))
+
+
+def flag_residual_outliers(
+    attribution: pd.DataFrame,
+    *,
+    tolerance: float = 0.01,
+) -> pd.DataFrame:
+    """Flag sessions where |residual_inr| exceeds the configured tolerance.
+
+    Parameters
+    ----------
+    attribution : pd.DataFrame
+        Daily attribution table containing 'residual_inr'.
+    tolerance : float, default 0.01
+        Maximum allowable absolute residual in INR before flagging.
+
+    Returns
+    -------
+    pd.DataFrame
+        Subset of attribution rows where |residual_inr| > tolerance.
+    """
+    if attribution.empty:
+        return attribution.copy()
+    mask = attribution["residual_inr"].abs() > tolerance
+    return attribution.loc[mask].copy().reset_index(drop=True)
 
 
 def verify_attribution_identity(attribution: pd.DataFrame, *, atol: float = 1e-9) -> bool:
@@ -317,7 +431,6 @@ def _build_d_ref_evaluator(
         return lambda d: float(series_dict.get(d, 0.0))
 
     if isinstance(d_ref, str):
-        # Extract symbol's day-over-day price change from signals
         sym_rows = signals[signals["symbol_a"] == d_ref].sort_values("trade_date")
         if sym_rows.empty:
             sym_rows = signals[signals["symbol_b"] == d_ref].sort_values("trade_date")

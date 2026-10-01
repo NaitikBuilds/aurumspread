@@ -166,32 +166,48 @@ trading-calendar dates used for fills. `inputs_sha256` covers the signal frame.
 `skip_counts` is a sorted tuple of `(reason, n)` pairs. Git SHA and wall clock
 belong on `RunStamp` from `backtest.stamp_run` at the I/O edge only.
 
-## Locked: daily attribution (T10)
+## Proposed: daily attribution (T10)
 
 PRD section 8. Grain: one row per session while a book is open.
 Identity to test: `total_pnl_inr = beta_inr + alpha_inr + cost_inr + residual_inr`.
 Returned by `backtest.walk_forward` as `WalkForwardResult.attribution` and
 standalone by `backtest.compute_daily_attribution`.
 
-`cost_inr` is signed (`<= 0.0`), representing the drag of fees and slippage
-incurred on that session. `residual_inr` captures any unmodelled pricing mismatch
-or data gaps (`total_pnl_inr - (beta_inr + alpha_inr + cost_inr)`), which is 0.0
-under exact mark-to-market.
+`total_pnl_inr` is computed independently from the trade log and daily
+mark-to-market (entry and exit execution fills and daily settlement marks minus
+fees paid, or `daily_mtm` if provided), not from the sum of the attribution
+columns. `residual_inr` measures the tracking difference
+`total_pnl_inr - (beta_inr + alpha_inr + cost_inr)` (non-zero when mark prices,
+fill rounding, or data gaps diverge from the signal model). Flagged by
+`backtest.flag_residual_outliers` against `residual_tolerance_inr` in `backtest.yaml`.
 
-`dRef` (the daily reference gold price change in INR/g) defaults to 0.0 (where all
-gross P&L is alpha) or can be passed as a series/mapping/constant or reference
-symbol (e.g. `GOLDM`). Since `beta_inr + alpha_inr = sum g_i * dP_i` for any
-`dRef`, the identity holds unconditionally.
+`cost_inr` is signed (`<= 0.0`), representing the drag of fees and slippage
+incurred on that session.
+
+`dRef` (the daily reference gold price change in INR/g):
+Person 2 proposes the front-month gold outright price change (e.g. front GOLDM)
+as the default reference series, with 0.0 as an explicit override. If `dRef`
+defaults to 0.0, `beta_inr` is then zero by construction and all gross P&L is
+attributed to `alpha_inr`.
+Trade-offs:
+- Front-month outright (proposed): captures market gold movement, isolating net
+  gram exposure (`residual_g * dRef`) as macro beta, so alpha represents pure
+  relative-value spread return. Requires defining a roll schedule for the front
+  month and depends on Person 1 contract registry data.
+- Null reference (`0.0` override): assumption-free and requires no reference
+  series, but sets beta to zero by construction, masking directional exposure
+  on unhedged/residual grams.
+This proposal requires Person 1 / Person 3 approval.
 
 | column | dtype | unit / values |
 |---|---|---|
 | `trade_date` | object (`datetime.date`) | session date |
-| `beta_inr` | float64 | `(sum g_i) * dRef` (signed residual grams × reference move) |
+| `beta_inr` | float64 | `(sum g_i) * dRef` (signed residual grams × reference move; zero by construction if dRef=0) |
 | `alpha_inr` | float64 | `sum g_i * (dP_i - dRef)` (relative-value spread return) |
 | `carry_inr` | float64 | subset of alpha, reported separately; not added again |
 | `cost_inr` | float64 | signed fees + slippage incurred that day (`<= 0.0`) |
 | `residual_inr` | float64 | `total_pnl_inr - (beta_inr + alpha_inr + cost_inr)` |
-| `total_pnl_inr` | float64 | `sum g_i * dP_i + cost_inr` |
+| `total_pnl_inr` | float64 | portfolio mark-to-market P&L (independent of beta/alpha/cost) |
 
 ## Open questions
 
@@ -204,6 +220,7 @@ symbol (e.g. `GOLDM`). Since `beta_inr + alpha_inr = sum g_i * dP_i` for any
    Slippage in `costs.yaml` is in ticks and cannot become INR/g until those
    fields are filled from MCX. Do not substitute a guess.
 4. Person 3: `percentile_rank` is a fraction in `(0, 1]`, not 0–100.
-5. Person 1 / Person 3: which series is `dRef` for attribution? Resolved in T10:
-   `dRef` defaults to 0.0 (or front GOLDM) and accepts any external series/mapping
-   without altering total gross P&L (`beta + alpha` is invariant to `dRef`).
+5. Person 1 / Person 3 (OPEN): which series is `dRef` for attribution? Person 2
+   proposes front-month gold outright price change as default (isolates macro
+   beta from residual grams) with 0.0 as explicit override (beta zero by
+   construction). Needs Person 1/3 sign-off on the reference symbol/roll schedule.
